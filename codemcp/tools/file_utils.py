@@ -135,19 +135,18 @@ async def write_text_content(
     # First normalize all line endings to \n
     normalized_content = content.replace("\r\n", "\n")
 
-    # Then replace with the desired line endings if different from \n
+    # Ensure directory exists
+    ensure_directory_exists(file_path)
+
+    # Write the content using binary mode to avoid automatic line ending conversion
+    loop = asyncio.get_event_loop()
     if actual_line_endings != "\n":
         final_content = normalized_content.replace("\n", actual_line_endings)
     else:
         final_content = normalized_content
-
-    # Ensure directory exists
-    ensure_directory_exists(file_path)
-
-    # Write the content asynchronously using run_in_executor
-    loop = asyncio.get_event_loop()
+        
     await loop.run_in_executor(
-        None, lambda: write_file_sync(file_path, final_content, encoding)
+        None, lambda: write_file_binary(file_path, final_content, encoding)
     )
 
 
@@ -161,3 +160,15 @@ def write_file_sync(file_path: str, content: str, encoding: str = "utf-8") -> No
     """
     with open(file_path, "w", encoding=encoding) as f:
         f.write(content)
+
+
+def write_file_binary(file_path: str, content: str, encoding: str = "utf-8") -> None:
+    """Synchronous helper function to write file content in binary mode to avoid line ending conversion.
+
+    Args:
+        file_path: The path to the file
+        content: The content to write
+        encoding: The encoding to use
+    """
+    with open(file_path, "wb") as f:
+        f.write(content.encode(encoding))
