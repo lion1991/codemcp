@@ -9,8 +9,9 @@ dependencies = [
     "mcp[cli]>=1.2.0",
     "ruff>=0.9.10",
     "toml>=0.10.2",
-    "tomli>=2.2.1",
+    "tomli>=2.1.1",
     "anyio>=3.7.0",
+    "pyyaml>=6.0.0",
 ]
 
 [dependency-groups]

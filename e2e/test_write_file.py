@@ -365,6 +365,172 @@ codemcp-id: test-chat-id""",
                 " but did not add file to git",
             )
 
+    async def test_user_prompt_with_markdown_code_block(self):
+        """Test handling of user prompt that contains a Markdown code block with triple backticks."""
+        test_file_path = os.path.join(
+            self.temp_dir.name, "markdown_code_block_test.txt"
+        )
+        content = "File created from a prompt with a code block"
+
+        # Create placeholder file and add to git
+        with open(test_file_path, "w") as f:
+            f.write("")
+
+        # Add it to git
+        await self.git_run(["add", test_file_path])
+
+        # Commit it
+        await self.git_run(
+            ["commit", "-m", "Add empty file for markdown code block test"]
+        )
+
+        # User prompt with Markdown code block
+        user_prompt_with_code_block = """Please create a file with this Python code:
+
+```
+---
+description: Description of when the rule is useful for the LLM
+globs: *.js,*.ts
+alwaysApply: false
+---
+Markdown to send to LLM
+```
+
+And make sure it runs correctly."""
+
+        async with self.create_client_session() as session:
+            # Initialize project to get chat_id
+            init_result_text = await self.call_tool_assert_success(
+                session,
+                "codemcp",
+                {
+                    "subtool": "InitProject",
+                    "path": self.temp_dir.name,
+                    "user_prompt": user_prompt_with_code_block,
+                    "subject_line": "test: user prompt with markdown code block",
+                    "reuse_head_chat_id": False,
+                },
+            )
+
+            # Extract chat_id from the init result
+            chat_id = self.extract_chat_id_from_text(init_result_text)
+
+            # Call the WriteFile tool with chat_id
+            result_text = await self.call_tool_assert_success(
+                session,
+                "codemcp",
+                {
+                    "subtool": "WriteFile",
+                    "path": test_file_path,
+                    "content": content,
+                    "description": "Write file from prompt with code block",
+                    "chat_id": chat_id,
+                },
+            )
+
+            # Verify the success message
+            self.assertIn("Successfully wrote to", result_text)
+
+            # Verify the file was created with the correct content
+            with open(test_file_path) as f:
+                file_content = f.read()
+            self.assertEqual(file_content, content)
+
+            # Get the commit message of the HEAD commit
+            commit_message = await self.git_run(
+                ["log", "-1", "--pretty=%B"], capture_output=True, text=True
+            )
+
+            # Normalize the chat_id in the commit message for expect test
+            normalized_commit_message = commit_message.replace(chat_id, "test-chat-id")
+
+            # Verify that the commit message contains the code block with triple backticks
+            self.assertExpectedInline(
+                normalized_commit_message,
+                """\
+test: user prompt with markdown code block
+
+Please create a file with this Python code:
+
+```
+---
+description: Description of when the rule is useful for the LLM
+globs: *.js,*.ts
+alwaysApply: false
+---
+Markdown to send to LLM
+```
+
+And make sure it runs correctly.
+
+```git-revs
+6350984  (Base revision)
+HEAD     Write file from prompt with code block
+```
+
+codemcp-id: test-chat-id""",
+            )
+
+            # Now do a second write operation with the same chat_id
+            updated_content = content + "\nSecond write with code block in user_prompt"
+
+            # Call the WriteFile tool again with updated content
+            result_text = await self.call_tool_assert_success(
+                session,
+                "codemcp",
+                {
+                    "subtool": "WriteFile",
+                    "path": test_file_path,
+                    "content": updated_content,
+                    "description": "Update file with second write",
+                    "chat_id": chat_id,
+                },
+            )
+
+            # Verify the success message
+            self.assertIn("Successfully wrote to", result_text)
+
+            # Verify the file was updated with the correct content
+            with open(test_file_path) as f:
+                file_content = f.read()
+            self.assertEqual(file_content, updated_content)
+
+            # Get the commit message after second write
+            commit_message = await self.git_run(
+                ["log", "-1", "--pretty=%B"], capture_output=True, text=True
+            )
+
+            # Normalize the chat_id for expect test
+            normalized_commit_message = commit_message.replace(chat_id, "test-chat-id")
+
+            # Verify that the commit message still contains the code block with triple backticks
+            self.assertExpectedInline(
+                normalized_commit_message,
+                """\
+test: user prompt with markdown code block
+
+Please create a file with this Python code:
+
+```
+---
+description: Description of when the rule is useful for the LLM
+globs: *.js,*.ts
+alwaysApply: false
+---
+Markdown to send to LLM
+```
+
+And make sure it runs correctly.
+
+```git-revs
+6350984  (Base revision)
+9071fd5  Write file from prompt with code block
+HEAD     Update file with second write
+```
+
+codemcp-id: test-chat-id""",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

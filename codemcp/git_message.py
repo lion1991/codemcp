@@ -230,4 +230,4 @@ def update_commit_message_with_description(
                 else:
                     main_message = f"{START_MARKER}\n{formatted_rev_list}\n{END_MARKER}"
 
-    return subject + "\n\n" + main_message + "\n\n" + trailers
+    return subject + "\n\n" + main_message + ("\n\n" + trailers if trailers else "")

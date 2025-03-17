@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import logging
 import os
 
 from ..common import (
@@ -8,6 +9,8 @@ from ..common import (
     MAX_OUTPUT_SIZE,
     normalize_file_path,
 )
+from ..git_query import find_git_root
+from ..rules import get_applicable_rules_content
 
 __all__ = [
     "read_file_content",
@@ -94,6 +97,18 @@ async def read_file_content(
         # Add a message if we truncated the file
         if line_offset + len(processed_lines) < total_lines:
             content += f"\n... (file truncated, showing {len(processed_lines)} of {total_lines} lines)"
+
+        # Apply relevant cursor rules
+        try:
+            # Find git repository root
+            repo_root = find_git_root(os.path.dirname(full_file_path))
+
+            if repo_root:
+                # Add applicable rules content
+                content += get_applicable_rules_content(repo_root, full_file_path)
+        except Exception as e:
+            logging.warning(f"Error applying cursor rules: {e!s}", exc_info=True)
+            # Don't fail the entire file read operation if rules can't be applied
 
         return content
     except Exception as e:

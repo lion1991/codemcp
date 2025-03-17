@@ -14,6 +14,7 @@ __all__ = [
     "get_repository_root",
     "is_git_repository",
     "get_ref_commit_chat_id",
+    "find_git_root",
 ]
 
 log = logging.getLogger(__name__)
@@ -261,3 +262,27 @@ async def get_ref_commit_chat_id(directory: str, ref_name: str) -> str | None:
             f"Exception when getting reference commit chat ID: {e!s}", exc_info=True
         )
         return None
+
+
+def find_git_root(start_path: str) -> str | None:
+    """Find the root of the Git repository starting from the given path.
+
+    Args:
+        start_path: The path to start searching from
+
+    Returns:
+        The absolute path to the Git repository root, or None if not found
+    """
+    path = os.path.abspath(start_path)
+
+    while path:
+        if os.path.isdir(os.path.join(path, ".git")):
+            return path
+
+        parent = os.path.dirname(path)
+        if parent == path:  # Reached filesystem root
+            return None
+
+        path = parent
+
+    return None

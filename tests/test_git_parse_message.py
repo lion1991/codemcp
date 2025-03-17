@@ -45,18 +45,6 @@ Signed-off-by: Alice <alice@example.com>
 Reviewed-by: Bob <bob@example.com>""",
         )
 
-    def test_trailers_with_divider(self):
-        message = "Subject line\n\nThis is the body of the commit message.\n\nSigned-off-by: Alice <alice@example.com>\nReviewed-by: Bob <bob@example.com>\n---\nThis is after the divider and should be ignored."
-        subject, body, trailers = parse_message(message)
-        self.assertEqual(subject, "Subject line")
-        self.assertEqual(body, "This is the body of the commit message.")
-        self.assertExpectedInline(
-            trailers,
-            """\
-Signed-off-by: Alice <alice@example.com>
-Reviewed-by: Bob <bob@example.com>""",
-        )
-
     def test_trailers_with_continuation(self):
         message = "Subject line\n\nThis is the body of the commit message.\n\nSigned-off-by: Alice <alice@example.com>\nCo-authored-by: Bob <bob@example.com>\n  Carol <carol@example.com>\n  Dave <dave@example.com>"
         subject, body, trailers = parse_message(message)

@@ -6,7 +6,6 @@ from typing import List, Tuple
 # Compile regexes once at module level for better performance
 TRAILER_RE = re.compile(r"^([A-Za-z0-9_-]+)(\s*:\s*)(.*)$")
 CONTINUATION_RE = re.compile(r"^\s+\S.*$")
-DIVIDER_RE = re.compile(r"^---")
 
 # Git-generated trailer prefixes
 GIT_GENERATED_PREFIXES = ["Signed-off-by: ", "(cherry picked from commit "]
@@ -42,11 +41,8 @@ def parse_message(message: str) -> Tuple[str, str, str]:
     if len(lines) <= 1:
         return subject, "", ""
 
-    # Find the divider line (---) and use only the content before it
-    message_end = next(
-        (i for i, line in enumerate(lines) if DIVIDER_RE.match(line)), len(lines)
-    )
-    message_lines = lines[1:message_end]
+    # Remove subject
+    message_lines = lines[1:]
 
     if not message_lines:
         return subject, "", ""
