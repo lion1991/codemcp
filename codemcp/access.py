@@ -4,7 +4,7 @@ import logging
 import os
 import subprocess
 
-from .shell import run_command
+from .git_query import get_repository_root
 
 __all__ = [
     "get_git_base_dir",
@@ -12,113 +12,62 @@ __all__ = [
 ]
 
 
-async def get_git_base_dir(file_path: str) -> str | None:
+async def get_git_base_dir(file_path: str) -> str:
     """Get the base directory of the git repository containing the file.
 
     Args:
         file_path: The path to the file or directory
 
     Returns:
-        The base directory of the git repository, or None if not in a git repository
+        The base directory of the git repository
 
+    Raises:
+        subprocess.SubprocessError: If there's an issue with git subprocess
+        OSError: If there's an issue with file operations
+        ValueError: If there's an invalid path or comparison
     """
-    try:
-        # First normalize the path to resolve any .. or symlinks
-        normalized_path = os.path.normpath(os.path.abspath(file_path))
+    # First normalize the path to resolve any .. or symlinks
+    normalized_path = os.path.normpath(os.path.abspath(file_path))
 
-        # Get the directory containing the file - handle non-existent files
-        if os.path.exists(normalized_path):
-            directory = (
-                os.path.dirname(normalized_path)
-                if os.path.isfile(normalized_path)
-                else normalized_path
-            )
-        else:
-            # For non-existent files, get the parent directory
-            directory = os.path.dirname(normalized_path)
+    # Use get_repository_root which handles non-existent paths and walks up directories
+    git_base_dir = await get_repository_root(normalized_path)
+    logging.debug(f"Git base directory: {git_base_dir}")
 
-            # If trying to access a directory outside of the repo via path traversal,
-            # we should detect it by checking if the directory exists after normalization
-            if not os.path.exists(directory):
-                # Store the original parent for security check
-                os.path.dirname(normalized_path)
+    # SECURITY CHECK: Ensure file_path is within the git repository
+    # This prevents path traversal across repositories
 
-                # Walk up the directory tree until we find an existing directory
-                while directory and not os.path.exists(directory):
-                    logging.debug(f"Directory doesn't exist, walking up: {directory}")
-                    parent = os.path.dirname(directory)
-                    # If we've reached the root directory and it doesn't exist, stop
-                    if parent == directory:
-                        logging.debug(
-                            f"Reached root directory and it doesn't exist: {directory}"
-                        )
-                        return None
-                    directory = parent
+    # Handle symlinked paths (on macOS /tmp links to /private/tmp)
+    normalized_git_base = os.path.normpath(os.path.realpath(git_base_dir))
+    normalized_path = os.path.normpath(os.path.realpath(normalized_path))
 
-                # If we couldn't find an existing parent directory, stop
-                if not directory or not os.path.exists(directory):
-                    logging.debug(
-                        f"Could not find an existing parent directory for: {normalized_path}"
-                    )
-                    return None
+    # Perform path traversal check - ensure target path is inside git repo
+    # Check if the path is within the git repo by calculating the relative path
+    rel_path = os.path.relpath(normalized_path, normalized_git_base)
 
-                logging.debug(f"Found existing parent directory: {directory}")
-
-        # Run git command to get the top-level directory of the repository
-        result = await run_command(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=directory,
-            capture_output=True,
-            check=True,
-            text=True,
+    # If the relative path starts with "..", it's outside the git repo
+    if rel_path.startswith("..") or rel_path == "..":
+        logging.debug(
+            f"Path traversal check: {normalized_path} is outside git repo {normalized_git_base}"
         )
 
-        # Return the path
-        git_base_dir = result.stdout.strip()
-        logging.debug(f"Git base directory: {git_base_dir}")
-
-        # SECURITY CHECK: Ensure file_path is within the git repository
-        # This prevents path traversal across repositories
-
-        # Handle symlinked paths (on macOS /tmp links to /private/tmp)
-        normalized_git_base = os.path.normpath(os.path.realpath(git_base_dir))
-        normalized_path = os.path.normpath(os.path.realpath(normalized_path))
-
-        # Perform path traversal check - ensure target path is inside git repo
-        try:
-            # Check if the path is within the git repo by calculating the relative path
-            rel_path = os.path.relpath(normalized_path, normalized_git_base)
-
-            # If the relative path starts with "..", it's outside the git repo
-            if rel_path.startswith("..") or rel_path == "..":
-                logging.debug(
-                    f"Path traversal check: {normalized_path} is outside git repo {normalized_git_base}"
-                )
-
-                # Special case: On macOS, check for /private/tmp vs /tmp differences
-                # If either path contains the other after normalization, they might be the same location
-                if (
-                    normalized_git_base in normalized_path
-                    or normalized_path in normalized_git_base
-                ):
-                    logging.debug(
-                        f"Path might be the same location after symlinks: {normalized_path}, {normalized_git_base}"
-                    )
-                else:
-                    logging.warning(
-                        f"File path {file_path} is outside git repository {git_base_dir}"
-                    )
-                    return None
-        except (ValueError, OSError) as e:
-            logging.warning(
-                f"File path {normalized_path} cannot be compared with git repository {normalized_git_base}: {e}"
+        # Special case: On macOS, check for /private/tmp vs /tmp differences
+        # If either path contains the other after normalization, they might be the same location
+        if (
+            normalized_git_base in normalized_path
+            or normalized_path in normalized_git_base
+        ):
+            logging.debug(
+                f"Path might be the same location after symlinks: {normalized_path}, {normalized_git_base}"
             )
-            return None
+        else:
+            logging.warning(
+                f"File path {file_path} is outside git repository {git_base_dir}"
+            )
+            raise ValueError(
+                f"File path {file_path} is outside git repository {git_base_dir}"
+            )
 
-        return git_base_dir
-    except (subprocess.SubprocessError, OSError) as e:
-        logging.debug(f"Error finding git base directory: {e!s}")
-        return None
+    return git_base_dir
 
 
 async def check_edit_permission(file_path: str) -> tuple[bool, str]:
@@ -131,21 +80,29 @@ async def check_edit_permission(file_path: str) -> tuple[bool, str]:
     Returns:
         A tuple of (is_permitted, message)
 
+    Raises:
+        subprocess.SubprocessError: If there's an issue with git subprocess
+        OSError: If there's an issue with file operations
+        ValueError: If file_path is not in a git repository or other path issues
     """
-    # Get the git base directory
-    git_base_dir = await get_git_base_dir(file_path)
+    try:
+        # Get the git base directory (will raise an exception if not in a git repo)
+        git_base_dir = await get_git_base_dir(file_path)
 
-    # If not in a git repository, deny access
-    if not git_base_dir:
-        return False, "File is not in a git repository. Permission denied."
+        # Check for codemcp.toml in the git base directory
+        config_path = os.path.join(git_base_dir, "codemcp.toml")
+        if not os.path.exists(config_path):
+            return False, (
+                "Permission denied: codemcp.toml file not found in the git repository root. "
+                "Please create a codemcp.toml file in the root directory of your project "
+                "to enable editing files with codemcp."
+            )
 
-    # Check for codemcp.toml in the git base directory
-    config_path = os.path.join(git_base_dir, "codemcp.toml")
-    if not os.path.exists(config_path):
-        return False, (
-            "Permission denied: codemcp.toml file not found in the git repository root. "
-            "Please create a codemcp.toml file in the root directory of your project "
-            "to enable editing files with codemcp."
+        return True, "Permission granted."
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
+        # Only catch exceptions to provide a specific permission denied message
+        # This is not silent suppression as we're explicitly handling the error case
+        return (
+            False,
+            f"File is not in a valid git repository. Permission denied. Error: {e}",
         )
-
-    return True, "Permission granted."

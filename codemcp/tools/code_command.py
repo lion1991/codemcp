@@ -8,7 +8,7 @@ from typing import List, Optional
 import tomli
 
 from ..common import normalize_file_path, truncate_output_content
-from ..git import commit_changes, is_git_repository
+from ..git import commit_changes, get_repository_root, is_git_repository
 from ..shell import run_command
 
 __all__ = [
@@ -65,19 +65,8 @@ async def check_for_changes(project_dir: str) -> bool:
     try:
         # Get the git repository root for reliable status checking
         try:
-            repo_root = (
-                await run_command(
-                    ["git", "rev-parse", "--show-toplevel"],
-                    cwd=project_dir,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            ).stdout.strip()
-
-            # Use the repo root as working directory for git commands
-            git_cwd = repo_root
-        except (subprocess.SubprocessError, OSError) as e:
+            git_cwd = await get_repository_root(project_dir)
+        except (subprocess.SubprocessError, OSError, ValueError) as e:
             logging.error(f"Error getting git repository root: {e}")
             # Fall back to the project directory
             git_cwd = project_dir

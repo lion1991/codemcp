@@ -95,7 +95,7 @@ async def write_file_content(
         chat_id: The unique ID of the current chat session
 
     Returns:
-        A success message or an error message
+        A success message
 
     Note:
         This function allows creating new files that don't exist yet.
@@ -103,42 +103,39 @@ async def write_file_content(
         Files must be tracked in the git repository before they can be modified.
 
     """
-    try:
-        # Validate file path and permissions
-        is_valid, error_message = await check_file_path_and_permissions(file_path)
-        if not is_valid:
-            raise ValueError(error_message)
+    # Validate file path and permissions
+    is_valid, error_message = await check_file_path_and_permissions(file_path)
+    if not is_valid:
+        raise ValueError(error_message)
 
-        # Check git tracking for existing files
-        is_tracked, track_error = await check_git_tracking_for_existing_file(
-            file_path, chat_id
-        )
-        if not is_tracked:
-            raise ValueError(track_error)
+    # Check git tracking for existing files
+    is_tracked, track_error = await check_git_tracking_for_existing_file(
+        file_path, chat_id
+    )
+    if not is_tracked:
+        raise ValueError(track_error)
 
-        # Determine encoding and line endings
-        old_file_exists = os.path.exists(file_path)
-        encoding = await detect_file_encoding(file_path) if old_file_exists else "utf-8"
+    # Determine encoding and line endings
+    old_file_exists = os.path.exists(file_path)
+    encoding = await detect_file_encoding(file_path) if old_file_exists else "utf-8"
 
-        if old_file_exists:
-            line_endings = await detect_line_endings(file_path)
-        else:
-            line_endings = detect_repo_line_endings(os.path.dirname(file_path))
-            # Ensure directory exists for new files
-            directory = os.path.dirname(file_path)
-            os.makedirs(directory, exist_ok=True)
+    if old_file_exists:
+        line_endings = await detect_line_endings(file_path)
+    else:
+        line_endings = detect_repo_line_endings(os.path.dirname(file_path))
+        # Ensure directory exists for new files
+        directory = os.path.dirname(file_path)
+        os.makedirs(directory, exist_ok=True)
 
-        # Write the content with proper encoding and line endings
-        await write_text_content(file_path, content, encoding, line_endings)
+    # Write the content with proper encoding and line endings
+    await write_text_content(file_path, content, encoding, line_endings)
 
-        # Commit the changes
-        git_message = ""
-        success, message = await commit_changes(file_path, description, chat_id)
-        if success:
-            git_message = f"\nChanges committed to git: {description}"
-        else:
-            git_message = f"\nFailed to commit changes to git: {message}"
+    # Commit the changes
+    git_message = ""
+    success, message = await commit_changes(file_path, description, chat_id)
+    if success:
+        git_message = f"\nChanges committed to git: {description}"
+    else:
+        git_message = f"\nFailed to commit changes to git: {message}"
 
-        return f"Successfully wrote to {file_path}{git_message}"
-    except Exception:
-        raise
+    return f"Successfully wrote to {file_path}{git_message}"

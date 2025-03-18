@@ -635,7 +635,7 @@ async def edit_file_content(
         chat_id: The unique ID of the current chat session
 
     Returns:
-        A success message or an error message
+        A success message
 
     Note:
         This function allows creating new files when old_string is empty and the file doesn't exist.
@@ -643,188 +643,180 @@ async def edit_file_content(
         Files must be tracked in the git repository before they can be modified.
 
     """
-    try:
-        # Convert to absolute path if needed
-        full_file_path = (
-            file_path if os.path.isabs(file_path) else os.path.abspath(file_path)
+    # Convert to absolute path if needed
+    full_file_path = (
+        file_path if os.path.isabs(file_path) else os.path.abspath(file_path)
+    )
+
+    # Check file path and permissions
+    is_valid, error_message = await check_file_path_and_permissions(full_file_path)
+    if not is_valid:
+        raise ValueError(error_message)
+
+    # Handle creating a new file - skip commit_pending_changes for non-existent files
+    creating_new_file = old_string == "" and not os.path.exists(full_file_path)
+
+    if not creating_new_file:
+        # Only check commit_pending_changes for existing files
+        is_tracked, track_error = await check_git_tracking_for_existing_file(
+            full_file_path,
+            chat_id=chat_id,
+        )
+        if not is_tracked:
+            raise ValueError(track_error)
+
+    # Debug string comparison using our thorough utility
+    strings_are_different = debug_string_comparison(
+        old_string,
+        new_string,
+        "old_string",
+        "new_string",
+    )
+
+    if not strings_are_different:
+        return "No changes to make: old_string and new_string are exactly the same."
+
+    # Proceed with the edit now that we've confirmed the strings are different
+
+    # Handle creating a new file
+    if old_string == "" and os.path.exists(full_file_path):
+        raise FileExistsError("Cannot create new file - file already exists.")
+
+    # Handle creating a new file
+    if old_string == "" and not os.path.exists(full_file_path):
+        directory = os.path.dirname(full_file_path)
+        os.makedirs(directory, exist_ok=True)
+        await write_text_content(full_file_path, new_string)
+
+        # Commit the changes
+        success, message = await commit_changes(full_file_path, description, chat_id)
+        git_message = ""
+        if success:
+            git_message = f"\nChanges committed to git: {description}"
+            # Include any extra details like previous commit hash if present in the message
+            if "previous commit was" in message:
+                git_message = f"\n{message}"
+        else:
+            git_message = f"\nFailed to commit changes to git: {message}"
+
+        return f"Successfully created {full_file_path}{git_message}"
+
+    # Check if file exists
+    if not os.path.exists(full_file_path):
+        # Try to find a similar file
+        similar_file = find_similar_file(full_file_path)
+        message = f"File does not exist: {full_file_path}"
+        if similar_file:
+            message += f" Did you mean {similar_file}?"
+        raise FileNotFoundError(message)
+
+    # Check if file is a Jupyter notebook
+    if full_file_path.endswith(".ipynb"):
+        raise ValueError(
+            "File is a Jupyter Notebook. Use the NotebookEditTool to edit this file."
         )
 
-        # Check file path and permissions
-        is_valid, error_message = await check_file_path_and_permissions(full_file_path)
-        if not is_valid:
-            return error_message
-
-        # Handle creating a new file - skip commit_pending_changes for non-existent files
-        creating_new_file = old_string == "" and not os.path.exists(full_file_path)
-
-        if not creating_new_file:
-            # Only check commit_pending_changes for existing files
-            is_tracked, track_error = await check_git_tracking_for_existing_file(
-                full_file_path,
-                chat_id=chat_id,
-            )
-            if not is_tracked:
-                raise ValueError(track_error)
-
-        # Debug string comparison using our thorough utility
-        strings_are_different = debug_string_comparison(
-            old_string,
-            new_string,
-            "old_string",
-            "new_string",
+    # Check if file has been read
+    if read_file_timestamps and full_file_path not in read_file_timestamps:
+        raise ValueError(
+            "File has not been read yet. Read it first before writing to it."
         )
 
-        if not strings_are_different:
-            return "No changes to make: old_string and new_string are exactly the same."
-
-        # Proceed with the edit now that we've confirmed the strings are different
-
-        # Handle creating a new file
-        if old_string == "" and os.path.exists(full_file_path):
-            raise FileExistsError("Cannot create new file - file already exists.")
-
-        # Handle creating a new file
-        if old_string == "" and not os.path.exists(full_file_path):
-            directory = os.path.dirname(full_file_path)
-            os.makedirs(directory, exist_ok=True)
-            await write_text_content(full_file_path, new_string)
-
-            # Commit the changes
-            success, message = await commit_changes(
-                full_file_path, description, chat_id
-            )
-            git_message = ""
-            if success:
-                git_message = f"\nChanges committed to git: {description}"
-                # Include any extra details like previous commit hash if present in the message
-                if "previous commit was" in message:
-                    git_message = f"\n{message}"
-            else:
-                git_message = f"\nFailed to commit changes to git: {message}"
-
-            return f"Successfully created {full_file_path}{git_message}"
-
-        # Check if file exists
-        if not os.path.exists(full_file_path):
-            # Try to find a similar file
-            similar_file = find_similar_file(full_file_path)
-            message = f"File does not exist: {full_file_path}"
-            if similar_file:
-                message += f" Did you mean {similar_file}?"
-            raise FileNotFoundError(message)
-
-        # Check if file is a Jupyter notebook
-        if full_file_path.endswith(".ipynb"):
+    # Check if file has been modified since read
+    if read_file_timestamps and os.path.exists(full_file_path):
+        last_write_time = os.stat(full_file_path).st_mtime
+        if last_write_time > read_file_timestamps.get(full_file_path, 0):
             raise ValueError(
-                "File is a Jupyter Notebook. Use the NotebookEditTool to edit this file."
+                "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it."
             )
 
-        # Check if file has been read
-        if read_file_timestamps and full_file_path not in read_file_timestamps:
-            raise ValueError(
-                "File has not been read yet. Read it first before writing to it."
-            )
+    # Detect encoding and line endings
+    encoding = await detect_file_encoding(full_file_path)
+    line_endings = await detect_line_endings(full_file_path)
 
-        # Check if file has been modified since read
-        if read_file_timestamps and os.path.exists(full_file_path):
-            last_write_time = os.stat(full_file_path).st_mtime
-            if last_write_time > read_file_timestamps.get(full_file_path, 0):
-                raise ValueError(
-                    "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it."
+    # Read the original file
+    from .async_file_utils import async_open_text
+
+    content = await async_open_text(full_file_path, encoding=encoding)
+
+    # Check if old_string exists in the file
+    if old_string and old_string not in content:
+        # Try advanced matching techniques
+        logger.debug(
+            "Direct match not found, trying advanced matching techniques...",
+        )
+
+        # Test if replace_most_similar_chunk can find a match
+        test_match = replace_most_similar_chunk(content, old_string, new_string)
+
+        if not test_match:
+            # If no match found, try to provide helpful suggestions
+            similar = find_similar_lines(old_string, content)
+            error_msg = "String to replace not found in file."
+
+            if similar:
+                error_msg += f"\n\nDid you mean to match these lines?\n\n```\n{similar}\n```\n\nTip: Make sure whitespace, indentation, and exact characters match."
+            raise ValueError(error_msg)
+
+        # If we're here, we found a match using advanced techniques
+        logger.debug("Found match using advanced matching techniques")
+
+    # Check for uniqueness of old_string
+    if old_string and content.count(old_string) > 1:
+        # First try to use the dotdotdots approach which handles multiple matches by context
+        try:
+            test_result = try_dotdotdots(content, old_string, new_string)
+            if test_result:
+                # If it worked with dotdotdots, we're good to proceed
+                logger.debug(
+                    "Successfully used dotdotdots strategy to handle multiple occurrences",
                 )
-
-        # Detect encoding and line endings
-        encoding = await detect_file_encoding(full_file_path)
-        line_endings = await detect_line_endings(full_file_path)
-
-        # Read the original file
-        from .async_file_utils import async_open_text
-
-        content = await async_open_text(full_file_path, encoding=encoding)
-
-        # Check if old_string exists in the file
-        if old_string and old_string not in content:
-            # Try advanced matching techniques
-            logger.debug(
-                "Direct match not found, trying advanced matching techniques...",
-            )
-
-            # Test if replace_most_similar_chunk can find a match
-            test_match = replace_most_similar_chunk(content, old_string, new_string)
-
-            if not test_match:
-                # If no match found, try to provide helpful suggestions
-                similar = find_similar_lines(old_string, content)
-                error_msg = "String to replace not found in file."
-
-                if similar:
-                    error_msg += f"\n\nDid you mean to match these lines?\n\n```\n{similar}\n```\n\nTip: Make sure whitespace, indentation, and exact characters match."
-                raise ValueError(error_msg)
-
-            # If we're here, we found a match using advanced techniques
-            logger.debug("Found match using advanced matching techniques")
-
-        # Check for uniqueness of old_string
-        if old_string and content.count(old_string) > 1:
-            # First try to use the dotdotdots approach which handles multiple matches by context
-            try:
-                test_result = try_dotdotdots(content, old_string, new_string)
-                if test_result:
-                    # If it worked with dotdotdots, we're good to proceed
-                    logger.debug(
-                        "Successfully used dotdotdots strategy to handle multiple occurrences",
-                    )
-                else:
-                    # Fall back to the original error message
-                    matches = content.count(old_string)
-                    raise ValueError(
-                        f"Found {matches} matches of the string to replace. For safety, this tool only supports replacing exactly one occurrence at a time. Add more lines of context to your edit and try again."
-                    )
-            except ValueError:
-                # If dotdotdots approach failed, give the original error message
+            else:
+                # Fall back to the original error message
                 matches = content.count(old_string)
                 raise ValueError(
                     f"Found {matches} matches of the string to replace. For safety, this tool only supports replacing exactly one occurrence at a time. Add more lines of context to your edit and try again."
                 )
-
-        # Apply the edit with advanced matching if needed
-        patch, updated_file = await apply_edit(full_file_path, old_string, new_string)
-
-        # If no changes were made (which should never happen at this point),
-        # log a warning but continue
-        if content == updated_file and old_string.strip():
-            logger.warning(
-                "No changes were made despite passing all checks. This is unexpected.",
+        except ValueError:
+            # If dotdotdots approach failed, give the original error message
+            matches = content.count(old_string)
+            raise ValueError(
+                f"Found {matches} matches of the string to replace. For safety, this tool only supports replacing exactly one occurrence at a time. Add more lines of context to your edit and try again."
             )
 
-        # Create directory if it doesn't exist
-        directory = os.path.dirname(full_file_path)
-        os.makedirs(directory, exist_ok=True)
+    # Apply the edit with advanced matching if needed
+    patch, updated_file = await apply_edit(full_file_path, old_string, new_string)
 
-        # Write the modified content back to the file
-        await write_text_content(full_file_path, updated_file, encoding, line_endings)
-
-        # Update read timestamp
-        if read_file_timestamps is not None:
-            read_file_timestamps[full_file_path] = os.stat(full_file_path).st_mtime
-
-        # Generate a snippet of the edited file to show in the response
-        snippet = get_edit_snippet(content, old_string, new_string)
-
-        # Commit the changes
-        git_message = ""
-        success, message = await commit_changes(full_file_path, description, chat_id)
-        if success:
-            git_message = f"\n\nChanges committed to git: {description}"
-            # Include any extra details like previous commit hash if present in the message
-            if "previous commit was" in message:
-                git_message = f"\n\n{message}"
-        else:
-            git_message = f"\n\nFailed to commit changes to git: {message}"
-
-        return f"Successfully edited {full_file_path}\n\nHere's a snippet of the edited file:\n{snippet}{git_message}"
-    except Exception as e:
+    # If no changes were made (which should never happen at this point),
+    # log a warning but continue
+    if content == updated_file and old_string.strip():
         logger.warning(
-            f"Exception suppressed during file editing: {e!s}", exc_info=True
+            "No changes were made despite passing all checks. This is unexpected.",
         )
-        return f"Error editing file: {e!s}"
+
+    # Create directory if it doesn't exist
+    directory = os.path.dirname(full_file_path)
+    os.makedirs(directory, exist_ok=True)
+
+    # Write the modified content back to the file
+    await write_text_content(full_file_path, updated_file, encoding, line_endings)
+
+    # Update read timestamp
+    if read_file_timestamps is not None:
+        read_file_timestamps[full_file_path] = os.stat(full_file_path).st_mtime
+
+    # Generate a snippet of the edited file to show in the response
+    snippet = get_edit_snippet(content, old_string, new_string)
+
+    # Commit the changes
+    git_message = ""
+    success, message = await commit_changes(full_file_path, description, chat_id)
+    if success:
+        git_message = f"\n\nChanges committed to git: {description}"
+        # Include any extra details like previous commit hash if present in the message
+        if "previous commit was" in message:
+            git_message = f"\n\n{message}"
+    else:
+        git_message = f"\n\nFailed to commit changes to git: {message}"
+
+    return f"Successfully edited {full_file_path}\n\nHere's a snippet of the edited file:\n{snippet}{git_message}"

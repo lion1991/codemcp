@@ -169,3 +169,7 @@ verbosity = "INFO"  # Can be DEBUG, INFO, WARNING, ERROR, or CRITICAL
 Logging is not configurable on a per project basis, but this shouldn't matter
 much because it's difficult to use Claude Desktop in parallel on multiple
 projects anyway.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).

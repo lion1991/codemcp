@@ -10,6 +10,15 @@ project_prompt = '''
   updated for the new argument, you should definitely make it non-optional.
 - When you make a new tool, the prompt goes in system_prompt in
   codecmp/tools/init_project.py
+- If an operation may fail, do NOT wrap it with a try-catch block to suppress
+  error and do some fallback handling.  Instead, let the exception propagate
+  to the top level so we can properly report it.  If you are trying to fix a test
+  because an exception is being thrown in this way, reason about what invariant
+  is being violated that is causing the exception to be thrown.
+- If you are trying to fix a test because an assert has failed, DO NOT remove
+  the assert. Instead, try to reason about what bug could be causing the
+  invariant to be violated. If you can't figure it out, ask the user to help
+  and halt.
 '''
 
 [commands]

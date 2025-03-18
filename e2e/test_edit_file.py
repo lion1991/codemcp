@@ -125,8 +125,7 @@ nothing to commit, working tree clean""",
             # Try to edit the untracked file
             new_content = "Modified untracked content"
 
-            # Using call_tool_assert_success since the tool is actually succeeding
-            await self.call_tool_assert_success(
+            await self.call_tool_assert_error(
                 session,
                 "codemcp",
                 {

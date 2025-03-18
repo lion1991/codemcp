@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import asyncio
-import logging
 import os
 
 from ..access import check_edit_permission
@@ -30,50 +29,42 @@ async def ls_directory(directory_path: str, chat_id: str | None = None) -> str:
         chat_id: The unique ID of the current chat session
 
     Returns:
-        A formatted string representation of the directory contents, or an error message
+        A formatted string representation of the directory contents
 
     """
-    try:
-        # Normalize the directory path
-        full_directory_path = normalize_file_path(directory_path)
+    # Normalize the directory path
+    full_directory_path = normalize_file_path(directory_path)
 
-        # Validate the directory path
-        if not os.path.exists(full_directory_path):
-            raise FileNotFoundError(f"Directory does not exist: {directory_path}")
+    # Validate the directory path
+    if not os.path.exists(full_directory_path):
+        raise FileNotFoundError(f"Directory does not exist: {directory_path}")
 
-        if not os.path.isdir(full_directory_path):
-            raise NotADirectoryError(f"Path is not a directory: {directory_path}")
+    if not os.path.isdir(full_directory_path):
+        raise NotADirectoryError(f"Path is not a directory: {directory_path}")
 
-        # Safety check: Verify the directory is within a git repository with codemcp.toml
-        if not await is_git_repository(full_directory_path):
-            raise ValueError(f"Directory is not in a Git repository: {directory_path}")
+    # Safety check: Verify the directory is within a git repository with codemcp.toml
+    if not await is_git_repository(full_directory_path):
+        raise ValueError(f"Directory is not in a Git repository: {directory_path}")
 
-        # Check edit permission (which verifies codemcp.toml exists)
-        is_permitted, permission_message = await check_edit_permission(
-            full_directory_path
-        )
-        if not is_permitted:
-            raise ValueError(permission_message)
+    # Check edit permission (which verifies codemcp.toml exists)
+    is_permitted, permission_message = await check_edit_permission(full_directory_path)
+    if not is_permitted:
+        raise ValueError(permission_message)
 
-        # Get the directory contents asynchronously
-        results = await list_directory(full_directory_path)
+    # Get the directory contents asynchronously
+    results = await list_directory(full_directory_path)
 
-        # Sort the results
-        results.sort()
+    # Sort the results
+    results.sort()
 
-        # Create a file tree and print it
-        tree = create_file_tree(results)
-        tree_output = print_tree(tree, cwd=full_directory_path)
+    # Create a file tree and print it
+    tree = create_file_tree(results)
+    tree_output = print_tree(tree, cwd=full_directory_path)
 
-        # Return the result with truncation message if needed
-        if len(results) < MAX_FILES:
-            return tree_output
-        return f"{TRUNCATED_MESSAGE}{tree_output}"
-    except Exception as e:
-        logging.warning(
-            f"Exception suppressed during directory listing: {e!s}", exc_info=True
-        )
-        return f"Error listing directory: {e!s}"
+    # Return the result with truncation message if needed
+    if len(results) < MAX_FILES:
+        return tree_output
+    return f"{TRUNCATED_MESSAGE}{tree_output}"
 
 
 async def list_directory(initial_path: str) -> list[str]:

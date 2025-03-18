@@ -350,7 +350,6 @@ test = ["./run_test.sh"]
 
             # Verify the commit message contains the original subject and body from InitProject
             head_commit_msg = await get_head_commit_message(self.temp_dir.name)
-            self.assertIsNotNone(head_commit_msg, "Commit message should not be None")
 
             # Check that both the subject and body are in the commit message
             self.assertIn(

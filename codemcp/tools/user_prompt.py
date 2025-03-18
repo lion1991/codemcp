@@ -23,21 +23,17 @@ async def user_prompt(user_text: str, chat_id: str | None = None) -> str:
     Returns:
         A message with any applicable cursor rules
     """
-    try:
-        logging.info(f"Received user prompt for chat ID {chat_id}: {user_text}")
+    logging.info(f"Received user prompt for chat ID {chat_id}: {user_text}")
 
-        # Get the current working directory to find repo root
-        cwd = os.getcwd()
-        repo_root = find_git_root(cwd)
+    # Get the current working directory to find repo root
+    cwd = os.getcwd()
+    repo_root = find_git_root(cwd)
 
-        result = "User prompt received"
+    result = "User prompt received"
 
-        # If we're in a git repo, look for applicable rules
-        if repo_root:
-            # Add applicable rules (no file path for UserPrompt)
-            result += get_applicable_rules_content(repo_root)
+    # If we're in a git repo, look for applicable rules
+    if repo_root:
+        # Add applicable rules (no file path for UserPrompt)
+        result += get_applicable_rules_content(repo_root)
 
-        return result
-    except Exception as e:
-        logging.warning(f"Exception suppressed in user_prompt: {e!s}", exc_info=True)
-        return f"Error processing user prompt: {e!s}"
+    return result

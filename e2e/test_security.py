@@ -136,7 +136,7 @@ class SecurityTest(MCPEndToEndTestCase):
 
             # Try to edit the ignored file
             # Using call_tool_assert_success because we expect success here
-            result_text = await self.call_tool_assert_success(
+            result_text = await self.call_tool_assert_error(
                 session,
                 "codemcp",
                 {
@@ -149,24 +149,10 @@ class SecurityTest(MCPEndToEndTestCase):
                 },
             )
 
-            # Check if the operation was permitted and what happened
-            if "Successfully edited" in result_text:
-                # The file was modified, check if it was added to git despite being ignored
-                with open(ignored_file_path) as f:
-                    new_content = f.read()
-                self.assertEqual(new_content, "Modified ignored content")
-
-                # Check if git add succeeded (it should for explicitly named files even if ignored)
-                ls_files_output = await self.git_run(
-                    ["ls-files", ignored_file_path], capture_output=True, text=True
-                )
-
-                # SECURITY CHECK: If editing ignored files succeeds, they should be explicitly added
-                # to git to maintain the invariant that we can revert any change
-                self.assertTrue(
-                    ls_files_output,
-                    "SECURITY VULNERABILITY: Ignored file was edited but not added to git",
-                )
+            self.assertExpectedInline(
+                result_text,
+                """Error executing tool codemcp: File is not tracked by git. Please add the file to git tracking first using 'git add <file>'""",
+            )
 
 
 if __name__ == "__main__":

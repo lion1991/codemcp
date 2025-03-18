@@ -177,47 +177,30 @@ async def glob_files(
     if path is None:
         path = os.getcwd()
 
-    try:
-        # Set up options for glob
-        options = {
-            "limit": limit,
-            "offset": offset,
-        }
+    # Set up options for glob
+    options = {
+        "limit": limit,
+        "offset": offset,
+    }
 
-        # Execute glob
-        result = await glob(pattern, path, options, signal)
+    # Execute glob
+    result = await glob(pattern, path, options, signal)
 
-        # Calculate execution time
-        execution_time = int(
-            (time.time() - start_time) * 1000
-        )  # Convert to milliseconds
+    # Calculate execution time
+    execution_time = int((time.time() - start_time) * 1000)  # Convert to milliseconds
 
-        # Get matching files
-        files = result.get("files", [])
+    # Get matching files
+    files = result.get("files", [])
 
-        # Prepare output
-        output = {
-            "filenames": files,
-            "durationMs": execution_time,
-            "numFiles": len(files),
-            "truncated": result.get("truncated", False),
-        }
+    # Prepare output
+    output = {
+        "filenames": files,
+        "durationMs": execution_time,
+        "numFiles": len(files),
+        "truncated": result.get("truncated", False),
+    }
 
-        # Add formatted result for assistant
-        output["resultForAssistant"] = render_result_for_assistant(output)
+    # Add formatted result for assistant
+    output["resultForAssistant"] = render_result_for_assistant(output)
 
-        return output
-    except Exception as e:
-        # Calculate execution time even on error
-        execution_time = int((time.time() - start_time) * 1000)
-
-        # Return empty results with error info
-        error_output = {
-            "filenames": [],
-            "durationMs": execution_time,
-            "numFiles": 0,
-            "error": str(e),
-            "resultForAssistant": f"Error: {e!s}",
-        }
-
-        return error_output
+    return output
