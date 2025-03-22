@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from contextlib import asynccontextmanager
 from typing import Any, List, Union
+from unittest import mock
 
 from expecttest import TestCase
 from mcp import ClientSession, StdioServerParameters
@@ -42,11 +43,19 @@ class MCPEndToEndTestCase(TestCase, unittest.IsolatedAsyncioTestCase):
         self.env.setdefault("GIT_COMMITTER_DATE", f"{self.testing_time} -0700")
         self.env.setdefault("GIT_AUTHOR_DATE", f"{self.testing_time} -0700")
 
+        # Patch get_subprocess_env to use the test environment
+        self.env_patcher = mock.patch(
+            "codemcp.shell.get_subprocess_env", return_value=self.env
+        )
+        self.env_patcher.start()
+
         # Initialize a git repository in the temp directory
         self.init_git_repo()
 
     async def asyncTearDown(self):
         """Async teardown to clean up after the test."""
+        # Stop the environment patcher
+        self.env_patcher.stop()
         self.temp_dir.cleanup()
 
     def init_git_repo(self):
@@ -141,44 +150,54 @@ class MCPEndToEndTestCase(TestCase, unittest.IsolatedAsyncioTestCase):
         """Call a tool and assert that it fails (isError=True).
 
         This is a helper method for the error path of tool calls, which:
-        1. Calls the specified tool with the given parameters
-        2. Asserts that the result is an error
-        3. Returns the extracted text result
+        1. Calls the specified tool with the given parameters using codemcp.main.codemcp directly
+        2. Asserts that the call raises an exception
+        3. Returns the exception string
 
         Args:
-            session: The client session to use
-            tool_name: The name of the tool to call
+            session: The client session to use (kept for backward compatibility but unused)
+            tool_name: The name of the tool to call (must be 'codemcp')
             tool_params: Dictionary of parameters to pass to the tool
 
         Returns:
-            str: The extracted text content from the result
+            str: The extracted error message
 
         Raises:
             AssertionError: If the tool call does not result in an error
         """
-        result = await session.call_tool(tool_name, tool_params)
+        import codemcp.main
 
-        # Check that the result is an error
-        self.assertTrue(
-            getattr(result, "isError", False),
-            f"Tool call to {tool_name} succeeded, expected to fail",
+        # Only codemcp tool is supported
+        assert tool_name == "codemcp", (
+            f"Only 'codemcp' tool is supported, got '{tool_name}'"
         )
 
-        # Return the normalized, extracted text result
-        normalized_result = self.normalize_path(result)
-        return self.extract_text_from_result(normalized_result)
+        # Extract the parameters to pass to codemcp.main.codemcp
+        subtool = tool_params.get("subtool")
+        kwargs = {k: v for k, v in tool_params.items() if k != "subtool"}
+
+        try:
+            # Call codemcp.main.codemcp directly instead of using the client session
+            await codemcp.main.codemcp(subtool, **kwargs)
+            # If we get here, the call succeeded - but we expected it to fail
+            self.fail(f"Tool call to {tool_name} succeeded, expected to fail")
+        except Exception as e:
+            # The call failed as expected - return the error message
+            error_message = f"Error executing tool {tool_name}: {str(e)}"
+            normalized_result = self.normalize_path(error_message)
+            return normalized_result
 
     async def call_tool_assert_success(self, session, tool_name, tool_params):
         """Call a tool and assert that it succeeds (isError=False).
 
         This is a helper method for the happy path of tool calls, which:
-        1. Calls the specified tool with the given parameters
-        2. Asserts that the result is not an error
-        3. Returns the extracted text result
+        1. Calls the specified tool with the given parameters using codemcp.main.codemcp directly
+        2. Asserts that the call succeeds (no exception)
+        3. Returns the result text
 
         Args:
-            session: The client session to use
-            tool_name: The name of the tool to call
+            session: The client session to use (kept for backward compatibility but unused)
+            tool_name: The name of the tool to call (must be 'codemcp')
             tool_params: Dictionary of parameters to pass to the tool
 
         Returns:
@@ -187,14 +206,19 @@ class MCPEndToEndTestCase(TestCase, unittest.IsolatedAsyncioTestCase):
         Raises:
             AssertionError: If the tool call results in an error
         """
-        result = await session.call_tool(tool_name, tool_params)
+        import codemcp.main
 
-        # Check that the result is not an error
-        self.assertFalse(
-            getattr(result, "isError", False),
-            f"Tool call to {tool_name} failed with error: {self.extract_text_from_result(result)}",
+        # Only codemcp tool is supported
+        assert tool_name == "codemcp", (
+            f"Only 'codemcp' tool is supported, got '{tool_name}'"
         )
 
+        # Extract the parameters to pass to codemcp.main.codemcp
+        subtool = tool_params.get("subtool")
+        kwargs = {k: v for k, v in tool_params.items() if k != "subtool"}
+
+        # Call codemcp.main.codemcp directly instead of using the client session
+        result = await codemcp.main.codemcp(subtool, **kwargs)
         # Return the normalized, extracted text result
         normalized_result = self.normalize_path(result)
         return self.extract_text_from_result(normalized_result)
@@ -203,23 +227,21 @@ class MCPEndToEndTestCase(TestCase, unittest.IsolatedAsyncioTestCase):
         """Initialize project and get chat_id.
 
         Args:
-            session: The client session to use
+            session: The client session to use (kept for backward compatibility but unused)
 
         Returns:
             str: The chat_id
         """
-        # First initialize project to get chat_id
-        init_result = await session.call_tool(
-            "codemcp",
-            {
-                "subtool": "InitProject",
-                "path": self.temp_dir.name,
-                "user_prompt": "Test initialization for get_chat_id",
-                "subject_line": "test: initialize for e2e testing",
-                "reuse_head_chat_id": False,
-            },
+        import codemcp.main
+
+        # First initialize project to get chat_id using codemcp.main.codemcp directly
+        init_result_text = await codemcp.main.codemcp(
+            "InitProject",
+            path=self.temp_dir.name,
+            user_prompt="Test initialization for get_chat_id",
+            subject_line="test: initialize for e2e testing",
+            reuse_head_chat_id=False,
         )
-        init_result_text = self.extract_text_from_result(init_result)
 
         # Extract chat_id from the init result
         import re

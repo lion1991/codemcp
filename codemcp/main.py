@@ -3,7 +3,7 @@
 import logging
 import os
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp import FastMCP
 
 from .tools.edit_file import edit_file_content
 from .tools.glob import MAX_RESULTS, glob_files
@@ -22,7 +22,6 @@ mcp = FastMCP("codemcp")
 # NB: If you edit this, also edit codemcp/tools/init_project.py
 @mcp.tool()
 async def codemcp(
-    ctx: Context,
     subtool: str,
     *,
     path: str | None = None,
@@ -267,15 +266,18 @@ async def codemcp(
 def configure_logging(log_file="codemcp.log"):
     """Configure logging to write to both a file and the console.
 
-    The log level is determined from the configuration file ~/.codemcprc.
+    The log level is determined from the configuration file.
     It can be overridden by setting the DESKAID_DEBUG environment variable.
     Example: DESKAID_DEBUG=1 python -m codemcp
 
+    The log directory is read from the configuration file's logger.path setting.
+    By default, logs are written to $HOME/.codemcp.
+
     By default, logs from the 'mcp' module are filtered out unless in debug mode.
     """
-    from .config import get_logger_verbosity
+    from .config import get_logger_path, get_logger_verbosity
 
-    log_dir = os.path.join(os.path.expanduser("~"), ".codemcp")
+    log_dir = get_logger_path()
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, log_file)
 

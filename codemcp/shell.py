@@ -5,11 +5,26 @@ import logging
 import subprocess
 from typing import Dict, List, Optional
 
+__all__ = [
+    "run_command",
+    "get_subprocess_env",
+]
+
+
+def get_subprocess_env() -> Optional[Dict[str, str]]:
+    """
+    Get the environment variables to be used for subprocess execution.
+    This function can be mocked in tests to control the environment.
+
+    Returns:
+        Optional dictionary of environment variables, or None to use the current environment.
+    """
+    return None
+
 
 async def run_command(
     cmd: List[str],
     cwd: Optional[str] = None,
-    env: Optional[Dict[str, str]] = None,
     check: bool = True,
     capture_output: bool = True,
     text: bool = True,
@@ -22,7 +37,6 @@ async def run_command(
     Args:
         cmd: Command to run as a list of strings
         cwd: Current working directory for the command
-        env: Environment variables to set for the command
         check: If True, raise CalledProcessError if the command returns non-zero exit code
         capture_output: If True, capture stdout and stderr
         text: If True, decode stdout and stderr as text
@@ -35,6 +49,9 @@ async def run_command(
     Raises:
         subprocess.CalledProcessError: If check=True and process returns non-zero exit code
         subprocess.TimeoutExpired: If the process times out
+
+    Notes:
+        Environment variables are obtained from get_subprocess_env() function.
     """
     # Log the command being run at INFO level
     log_cmd = " ".join(str(c) for c in cmd)
@@ -48,7 +65,7 @@ async def run_command(
     process = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
-        env=env,
+        env=get_subprocess_env(),
         stdout=stdout_pipe,
         stderr=stderr_pipe,
     )

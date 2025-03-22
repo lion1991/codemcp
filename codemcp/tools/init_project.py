@@ -348,7 +348,7 @@ Remember: when making multiple file edits in a row to the same file, you should 
 
 Records the user's verbatim prompt text for each interaction after the initial one.
 You should call this tool with the user's exact message at the beginning of each response.
-This tool must be called in every response except for the first one where InitProject was used.
+This tool must be called in every response except for the first one where InitProject was used.  Do NOT include documents or other attachments, only the text prompt.
 
 ## LS chat_id path
 

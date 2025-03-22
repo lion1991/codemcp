@@ -53,8 +53,8 @@ class ReadFileTest(MCPEndToEndTestCase):
                 {
                     "subtool": "ReadFile",
                     "path": test_file_path,
-                    "offset": "2",  # Start from line 2
-                    "limit": "2",  # Read 2 lines
+                    "offset": 2,  # Start from line 2
+                    "limit": 2,  # Read 2 lines
                     "chat_id": chat_id,
                 },
             )
