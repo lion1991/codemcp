@@ -375,6 +375,9 @@ Example:
 
 Runs a command.  This does NOT support arbitrary code execution, ONLY call
 with this set of valid commands: {command_help}
+When a single string is passed as arguments, it will be interpreted as space-separated
+arguments using shell-style tokenization (spaces separate arguments, quotes can be used
+for arguments containing spaces, etc.).
 {_generate_command_docs(command_docs)}
 
 ## Summary

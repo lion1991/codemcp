@@ -119,9 +119,17 @@ async def create_commit_reference(
         head_hash = head_hash_result.stdout.strip()
         parent_arg = ["-p", head_hash]
 
-    # Create the commit object
+    # Create the commit object (with GPG signing explicitly disabled)
     commit_result = await run_command(
-        ["git", "commit-tree", tree_hash, *parent_arg, "-m", commit_message],
+        [
+            "git",
+            "commit-tree",
+            "--no-gpg-sign",
+            tree_hash,
+            *parent_arg,
+            "-m",
+            commit_message,
+        ],
         cwd=git_cwd,
         capture_output=True,
         text=True,
@@ -319,6 +327,7 @@ async def commit_changes(
                 [
                     "git",
                     "commit-tree",
+                    "--no-gpg-sign",
                     tree_hash,
                     "-p",
                     head_hash,
@@ -366,9 +375,9 @@ async def commit_changes(
         commit_hash=commit_hash,
     )
 
-    # Amend the previous commit
+    # Amend the previous commit (with GPG signing explicitly disabled)
     commit_result = await run_command(
-        ["git", "commit", "--amend", "-m", commit_message],
+        ["git", "commit", "--amend", "--no-gpg-sign", "-m", commit_message],
         cwd=git_cwd,
         capture_output=True,
         text=True,

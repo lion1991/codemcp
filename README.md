@@ -55,11 +55,40 @@ On Windows, double backslashes are necessary for the path:
 C:\\Users\\<username>\\.local\\bin\\uvx.exe
 ```
 
-If the MCP successfully loaded, a hammer icon will appear and when you click
-it "codemcp" will be visible.
+Restart the Claude Desktop app after modifying the JSON.  If the MCP
+successfully loaded, a hammer icon will appear and when you click it "codemcp"
+will be visible.
+
+### Global install with pip
+
+If you don't want to use uv, you can also globally pip install the latest
+codemcp version, assuming your global Python install is recent enough (Python
+3.12) and doesn't have Python dependencies that conflict with codemcp.  Some
+users report this is easier to get working on Windows.
+
+1. `pip install git+https://github.com/ezyang/codemcp@prod`
+2. Add the following configuration to `claude_desktop_config.json` file
+```json
+{
+    "mcpServers": {
+         "codemcp": {
+               "command": "python",
+               "args": ["-m", "codemcp"]
+            }
+    }
+}
+```
+3. Restart Claude Desktop
+
+You will need to manually upgrade codemcp to take updates using
+`pip install --upgrade git+https://github.com/ezyang/codemcp@prod`
+
+### Other tips
 
 Pro tip: If the server fails to load, go to Settings > Developer > codemcp >
-Logs to look at the MCP logs, they're very helpful for debugging.
+Logs to look at the MCP logs, they're very helpful for debugging. The logs on
+Windows should be loaded `C:\Users\<user_name>\AppData\Roaming\Claude\logs`
+(replace `<user_name>` with your username.
 
 Pro tip: if on Windows, the logs say "Git executable not found. Ensure that
 Git is installed and available", and you *just* installed Git, reboot your

@@ -99,6 +99,21 @@ async def codemcp(
         if isinstance(arguments, str):
             arguments = [arguments]
 
+        # Normalize string inputs to ensure consistent newlines
+        def normalize_newlines(s):
+            """Normalize string to use \n for all newlines."""
+            return s.replace("\r\n", "\n") if isinstance(s, str) else s
+
+        # Normalize content, old_string, and new_string to use consistent \n newlines
+        content = normalize_newlines(content)
+        old_string = normalize_newlines(old_string)
+        new_string = normalize_newlines(new_string)
+        # Also normalize backward compatibility parameters
+        old_str = normalize_newlines(old_str)
+        new_str = normalize_newlines(new_str)
+        # And user prompt which might contain code blocks
+        user_prompt = normalize_newlines(user_prompt)
+
         # Get all provided non-None parameters
         provided_params = {
             param: value
