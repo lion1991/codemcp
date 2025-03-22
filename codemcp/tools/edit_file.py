@@ -126,8 +126,14 @@ async def apply_edit(
     if old_string in content:
         updated_file = content.replace(old_string, new_string, 1)
     else:
-        logger.debug("All matching techniques failed. No changes made.")
-        updated_file = content
+        # Use the more robust replacement strategies
+        logger.debug("Direct match not found, trying advanced matching techniques...")
+        updated_file = replace_most_similar_chunk(content, old_string, new_string)
+    
+        # If we still couldn't match, return the original content
+        if not updated_file:
+            logger.debug("All matching techniques failed. No changes made.")
+            updated_file = content
 
     # Create a useful diff/patch structure
     patch = []
@@ -739,8 +745,26 @@ async def edit_file_content(
 
     # Check if old_string exists in the file
     if old_string and old_string not in content:
-        error_msg = "String to replace not found in file."
-        raise ValueError(error_msg)
+        # Try advanced matching techniques
+        logger.debug(
+            "Direct match not found, trying advanced matching techniques...",
+        )
+    
+        # Test if replace_most_similar_chunk can find a match
+        test_match = replace_most_similar_chunk(content, old_string, new_string)
+    
+        if not test_match:
+            # If no match found, try to provide helpful suggestions
+            similar = find_similar_lines(old_string, content)
+            error_msg = "String to replace not found in file."
+    
+            if similar:
+                error_msg += f"\n\nDid you mean to match these lines?\n\n```\n{similar}\n```\n\nTip: Make sure whitespace, indentation, and exact characters match."
+            raise ValueError(error_msg)
+    
+        # If we're here, we found a match using advanced techniques
+        logger.debug("Found match using advanced matching techniques")
+        updated_file = test_match
 
     # Check for uniqueness of old_string
     if old_string and content.count(old_string) > 1:
