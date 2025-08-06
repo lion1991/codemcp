@@ -567,7 +567,18 @@ def run() -> None:
     type=click.Path(exists=True),
     help="Path to SSL private key file for HTTPS",
 )
-def serve(host: str, port: int, cors_origin: List[str], ssl_cert: Optional[str], ssl_key: Optional[str]) -> None:
+@click.option(
+    "--openai-mode",
+    is_flag=True,
+    help="Run in OpenAI-compatible mode with search/fetch tools for code",
+)
+@click.option(
+    "--code-dir",
+    type=click.Path(exists=True),
+    help="Directory to search for code files (OpenAI mode only)",
+)
+def serve(host: str, port: int, cors_origin: List[str], ssl_cert: Optional[str], ssl_key: Optional[str], 
+         openai_mode: bool, code_dir: Optional[str]) -> None:
     """Run the MCP SSE server with optional HTTPS support.
 
     This command mounts the MCP as an SSE server that can be connected to from web applications.
@@ -575,9 +586,48 @@ def serve(host: str, port: int, cors_origin: List[str], ssl_cert: Optional[str],
     
     For HTTPS, provide both --ssl-cert and --ssl-key options:
         codemcp serve --ssl-cert cert.pem --ssl-key key.pem
+    
+    For OpenAI-compatible mode (ChatGPT integration):
+        codemcp serve --openai-mode --code-dir /path/to/code
     """
     configure_logging()
     
+    # Check if running in OpenAI mode
+    if openai_mode:
+        # Import and run the OpenAI-compatible server
+        import os
+        import sys
+        
+        # Set environment variables for OpenAI mode
+        if code_dir:
+            os.environ["MCP_CODE_DIR"] = code_dir
+        else:
+            os.environ["MCP_CODE_DIR"] = os.getcwd()
+        
+        os.environ["MCP_SERVER_BASE_URL"] = f"{'https' if ssl_cert and ssl_key else 'http'}://{host}:{port}"
+        
+        # Pass SSL configuration if provided
+        if ssl_cert and ssl_key:
+            os.environ["MCP_SSL_CERT"] = ssl_cert
+            os.environ["MCP_SSL_KEY"] = ssl_key
+        
+        logging.info("Starting in OpenAI-compatible mode for code search")
+        logging.info(f"Code directory: {os.environ['MCP_CODE_DIR']}")
+        logging.info(f"Connect ChatGPT to: {os.environ['MCP_SERVER_BASE_URL']}/sse/")
+        
+        # Import and run the OpenAI server directly
+        from .openai_mcp_server import main as openai_main
+        
+        try:
+            openai_main()
+        except KeyboardInterrupt:
+            logging.info("Server stopped by user")
+        except Exception as e:
+            logging.error(f"Server error: {e}")
+            raise click.ClickException(f"Failed to start OpenAI MCP server: {e}")
+        return
+    
+    # Standard mode (Anthropic MCP)
     # Validate SSL configuration
     if (ssl_cert and not ssl_key) or (ssl_key and not ssl_cert):
         logging.error("Both --ssl-cert and --ssl-key must be provided for HTTPS")
