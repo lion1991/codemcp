@@ -557,14 +557,34 @@ def run() -> None:
     multiple=True,
     help="Origins to allow CORS for (default: https://claude.ai)",
 )
-def serve(host: str, port: int, cors_origin: List[str]) -> None:
-    """Run the MCP SSE server.
+@click.option(
+    "--ssl-cert",
+    type=click.Path(exists=True),
+    help="Path to SSL certificate file for HTTPS",
+)
+@click.option(
+    "--ssl-key",
+    type=click.Path(exists=True),
+    help="Path to SSL private key file for HTTPS",
+)
+def serve(host: str, port: int, cors_origin: List[str], ssl_cert: Optional[str], ssl_key: Optional[str]) -> None:
+    """Run the MCP SSE server with optional HTTPS support.
 
     This command mounts the MCP as an SSE server that can be connected to from web applications.
     By default, it allows CORS requests from claude.ai.
+    
+    For HTTPS, provide both --ssl-cert and --ssl-key options:
+        codemcp serve --ssl-cert cert.pem --ssl-key key.pem
     """
     configure_logging()
-    logging.info(f"Starting MCP SSE server on {host}:{port}")
+    
+    # Validate SSL configuration
+    if (ssl_cert and not ssl_key) or (ssl_key and not ssl_cert):
+        logging.error("Both --ssl-cert and --ssl-key must be provided for HTTPS")
+        raise click.BadParameter("Both --ssl-cert and --ssl-key must be provided for HTTPS")
+    
+    protocol = "https" if ssl_cert and ssl_key else "http"
+    logging.info(f"Starting MCP SSE server on {protocol}://{host}:{port}")
 
     # If no origins provided, use the default
     allowed_origins = list(cors_origin) if cors_origin else None
@@ -589,6 +609,20 @@ def serve(host: str, port: int, cors_origin: List[str]) -> None:
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
 
+    # Prepare uvicorn configuration
+    uvicorn_kwargs = {
+        "host": host,
+        "port": port,
+        "timeout_graceful_shutdown": 0,
+    }
+    
+    # Add SSL configuration if provided
+    if ssl_cert and ssl_key:
+        uvicorn_kwargs["ssl_certfile"] = ssl_cert
+        uvicorn_kwargs["ssl_keyfile"] = ssl_key
+        logging.info(f"Using SSL certificate: {ssl_cert}")
+        logging.info(f"Using SSL key: {ssl_key}")
+
     # Start the server - even though we pass timeout_graceful_shutdown=0,
     # our signal handler will execute first and terminate the process
-    uvicorn.run(app, host=host, port=port, timeout_graceful_shutdown=0)
+    uvicorn.run(app, **uvicorn_kwargs)
