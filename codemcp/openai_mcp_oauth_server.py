@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
 """
-OpenAI-compatible MCP Server for Code Search
-
-This server implements the Model Context Protocol (MCP) with search and fetch
-capabilities for searching and retrieving code files from local directories.
-Designed to work with ChatGPT's chat and deep research features.
+OpenAI-compatible MCP Server with OAuth 2.0 Authentication (V2)
+This version uses the same SSE approach as the working non-OAuth version
 """
 
 import logging
 import os
 import re
 import json
+import secrets
+import hashlib
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
-import hashlib
-import mimetypes
+from datetime import datetime
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.routing import Route, Mount
+from starlette.responses import JSONResponse, HTMLResponse
+from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware import Middleware
+import uvicorn
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,9 +32,18 @@ logger = logging.getLogger(__name__)
 CODE_DIR = os.environ.get("MCP_CODE_DIR", os.getcwd())
 IGNORE_DIRS = os.environ.get("MCP_IGNORE_DIRS", ".git,node_modules,__pycache__,.venv,venv,dist,build").split(",")
 SERVER_NAME = os.environ.get("MCP_SERVER_NAME", "Code Search MCP Server")
-SERVER_BASE_URL = os.environ.get("MCP_SERVER_BASE_URL", "http://localhost:8000")
+SERVER_BASE_URL = os.environ.get("MCP_SERVER_BASE_URL", "https://localhost:8000")
 
-# Code file extensions to index
+# OAuth Configuration  
+OAUTH_CLIENT_ID = os.environ.get("MCP_OAUTH_CLIENT_ID", "mcp-code-search")
+OAUTH_CLIENT_SECRET = os.environ.get("MCP_OAUTH_CLIENT_SECRET", secrets.token_urlsafe(32))
+
+# Store for OAuth tokens (in production, use a database)
+oauth_tokens = {}
+oauth_codes = {}
+registered_clients = {}
+
+# Code file extensions
 CODE_EXTENSIONS = {
     '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.c', '.cpp', '.cc', '.cxx',
     '.h', '.hpp', '.cs', '.rb', '.go', '.rs', '.php', '.swift', '.kt', '.scala',
@@ -38,15 +53,15 @@ CODE_EXTENSIONS = {
     '.vue', '.svelte', '.lua', '.dart', '.elm', '.clj', '.cljs', '.edn', '.ex', '.exs'
 }
 
-# Initialize the FastMCP server
+# Set JSON encoder to not escape Unicode
+json.encoder.ensure_ascii = False
+
+# Initialize the FastMCP server (same as working non-OAuth version)
 server_instructions = """
 This MCP server provides code search and retrieval capabilities for local code repositories.
 Use the search tool to find relevant code files based on keywords, function names, or code patterns,
 then use the fetch tool to retrieve complete file content for analysis.
 """
-
-# Set JSON encoder to not escape Unicode
-json.encoder.ensure_ascii = False
 
 mcp = FastMCP(
     name=SERVER_NAME,
@@ -54,7 +69,7 @@ mcp = FastMCP(
 )
 
 class CodeSearchEngine:
-    """Code search engine for local code repositories"""
+    """Code search engine for local code repositories (same as working version)"""
     
     def __init__(self, code_dir: str):
         self.code_dir = Path(code_dir).resolve()
@@ -77,20 +92,15 @@ class CodeSearchEngine:
         logger.info(f"Indexing code files in: {self.code_dir}")
         
         for file_path in self.code_dir.rglob('*'):
-            # Skip if in ignored directory
             if self._should_ignore(file_path.relative_to(self.code_dir)):
                 continue
             
             if file_path.is_file() and file_path.suffix.lower() in CODE_EXTENSIONS:
                 try:
-                    # Generate unique ID for the file
                     relative_path = file_path.relative_to(self.code_dir)
                     file_id = hashlib.md5(str(relative_path).encode()).hexdigest()[:12]
                     
-                    # Read file content with UTF-8 encoding
                     content = file_path.read_text(encoding='utf-8', errors='ignore')
-                    
-                    # Extract language from extension
                     language = self._get_language(file_path.suffix)
                     
                     index[file_id] = {
@@ -120,14 +130,12 @@ class CodeSearchEngine:
         """Get language name from file extension"""
         language_map = {
             '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
-            '.jsx': 'javascript', '.tsx': 'typescript', '.java': 'java',
-            '.c': 'c', '.cpp': 'cpp', '.cc': 'cpp', '.h': 'c', '.hpp': 'cpp',
-            '.cs': 'csharp', '.rb': 'ruby', '.go': 'go', '.rs': 'rust',
-            '.php': 'php', '.swift': 'swift', '.kt': 'kotlin', '.scala': 'scala',
-            '.r': 'r', '.sh': 'shell', '.bash': 'bash', '.ps1': 'powershell',
-            '.html': 'html', '.css': 'css', '.scss': 'scss', '.json': 'json',
-            '.xml': 'xml', '.yaml': 'yaml', '.yml': 'yaml', '.sql': 'sql',
-            '.md': 'markdown', '.vue': 'vue', '.svelte': 'svelte'
+            '.java': 'java', '.go': 'go', '.rs': 'rust', '.rb': 'ruby',
+            '.php': 'php', '.cs': 'csharp', '.cpp': 'cpp', '.c': 'c',
+            '.swift': 'swift', '.kt': 'kotlin', '.scala': 'scala',
+            '.sh': 'shell', '.md': 'markdown', '.json': 'json',
+            '.yaml': 'yaml', '.yml': 'yaml', '.xml': 'xml', '.html': 'html',
+            '.css': 'css', '.sql': 'sql'
         }
         return language_map.get(suffix.lower(), 'text')
     
@@ -150,42 +158,17 @@ class CodeSearchEngine:
             
             content_lower = doc['content'].lower()
             if query_lower in content_lower:
-                occurrences = content_lower.count(query_lower)
-                score += occurrences * 2
-                match_pos = content_lower.find(query_lower)
+                score += content_lower.count(query_lower) * 2
                 
                 if f"def {query_lower}" in content_lower or f"class {query_lower}" in content_lower:
                     score += 30
-            else:
-                match_pos = -1
             
             if score > 0:
-                if match_pos != -1:
-                    lines = doc['content'].splitlines()
-                    char_count = 0
-                    line_num = 0
-                    
-                    for i, line in enumerate(lines):
-                        if char_count <= match_pos < char_count + len(line) + 1:
-                            line_num = i
-                            break
-                        char_count += len(line) + 1
-                    
-                    start_line = max(0, line_num - 2)
-                    end_line = min(len(lines), line_num + 3)
-                    snippet_lines = lines[start_line:end_line]
-                    snippet = "\n".join([f"{start_line + i + 1:4d}: {line}" 
-                                        for i, line in enumerate(snippet_lines)])
-                    
-                    if start_line > 0:
-                        snippet = "...\n" + snippet
-                    if end_line < len(lines):
-                        snippet = snippet + "\n..."
-                else:
-                    lines = doc['content'].splitlines()[:5]
-                    snippet = "\n".join([f"{i+1:4d}: {line}" for i, line in enumerate(lines)])
-                    if len(doc['content'].splitlines()) > 5:
-                        snippet += "\n..."
+                # Extract snippet
+                lines = doc['content'].splitlines()[:5]
+                snippet = "\n".join([f"{i+1:4d}: {line}" for i, line in enumerate(lines)])
+                if len(doc['content'].splitlines()) > 5:
+                    snippet += "\n..."
                 
                 snippet = f"[{doc['language']}] {doc['relative_path']} ({doc['lines']} lines)\n{snippet}"
                 
@@ -198,7 +181,6 @@ class CodeSearchEngine:
                 })
         
         results.sort(key=lambda x: x['score'], reverse=True)
-        
         for result in results:
             del result['score']
         
@@ -214,7 +196,7 @@ class CodeSearchEngine:
         return {
             'id': doc['id'],
             'title': doc['relative_path'],
-            'text': doc['content'],  # Return raw UTF-8 content
+            'text': doc['content'],
             'url': doc['url'],
             'metadata': {
                 'path': doc['path'],
@@ -229,6 +211,7 @@ class CodeSearchEngine:
 # Initialize search engine
 search_engine = None
 
+# Define MCP tools EXACTLY like the working non-OAuth version
 @mcp.tool()
 async def search(query: str) -> Dict[str, List[Dict[str, Any]]]:
     """
@@ -302,32 +285,121 @@ async def fetch(id: str) -> Dict[str, Any]:
     
     logger.info(f"Fetched code file: {document['title']}")
     
-    # The document already contains UTF-8 text properly
     return document
 
-def main():
-    """Main function to start the MCP server"""
-    import sys
+# OAuth endpoints (simplified)
+async def oauth_authorize(request):
+    """OAuth 2.0 Authorization endpoint"""
+    client_id = request.query_params.get('client_id')
+    redirect_uri = request.query_params.get('redirect_uri')
+    state = request.query_params.get('state')
     
-    # Parse port from base URL if provided
+    if client_id and redirect_uri:
+        auth_code = secrets.token_urlsafe(32)
+        oauth_codes[auth_code] = {
+            'client_id': client_id,
+            'redirect_uri': redirect_uri,
+            'created_at': time.time()
+        }
+        
+        redirect_url = f"{redirect_uri}?code={auth_code}"
+        if state:
+            redirect_url += f"&state={state}"
+        
+        html_content = f"""
+        <html>
+        <head>
+            <title>Authorizing...</title>
+            <meta http-equiv="refresh" content="1;url={redirect_url}">
+        </head>
+        <body>
+            <h2>MCP Code Search Authorization</h2>
+            <p>Redirecting...</p>
+        </body>
+        </html>
+        """
+        return HTMLResponse(html_content)
+    
+    return JSONResponse({'error': 'invalid_request'}, status_code=400)
+
+async def oauth_token(request):
+    """OAuth 2.0 Token endpoint"""
+    body = await request.form()
+    grant_type = body.get('grant_type')
+    
+    if grant_type == 'authorization_code':
+        code = body.get('code')
+        client_id = body.get('client_id')
+        
+        if code in oauth_codes:
+            access_token = secrets.token_urlsafe(32)
+            oauth_tokens[access_token] = {
+                'client_id': client_id,
+                'created_at': time.time()
+            }
+            del oauth_codes[code]
+            
+            return JSONResponse({
+                'access_token': access_token,
+                'token_type': 'Bearer',
+                'expires_in': 86400  # 24 hours
+            })
+    
+    return JSONResponse({'error': 'invalid_grant'}, status_code=400)
+
+async def oauth_register(request):
+    """Dynamic Client Registration endpoint"""
+    try:
+        body = await request.json()
+    except:
+        return JSONResponse({'error': 'invalid_request'}, status_code=400)
+    
+    client_id = f"client_{secrets.token_urlsafe(16)}"
+    client_secret = secrets.token_urlsafe(32)
+    
+    registered_clients[client_id] = {
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'created_at': time.time()
+    }
+    
+    logger.info(f"Registered new client: {client_id}")
+    
+    return JSONResponse({
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'client_id_issued_at': int(time.time()),
+        'client_secret_expires_at': 0
+    })
+
+async def oauth_metadata(request):
+    """OAuth 2.0 Authorization Server Metadata"""
+    return JSONResponse({
+        'issuer': SERVER_BASE_URL,
+        'authorization_endpoint': f'{SERVER_BASE_URL}/oauth/authorize',
+        'token_endpoint': f'{SERVER_BASE_URL}/oauth/token',
+        'registration_endpoint': f'{SERVER_BASE_URL}/oauth/register',
+        'response_types_supported': ['code'],
+        'grant_types_supported': ['authorization_code'],
+        'token_endpoint_auth_methods_supported': ['client_secret_post', 'none']
+    })
+
+def main():
+    """Main function - similar to working non-OAuth version"""
     port = 8000
-    host = "0.0.0.0"  # Always bind to all interfaces
+    host = "0.0.0.0"
+    
     if SERVER_BASE_URL:
-        from urllib.parse import urlparse
         parsed = urlparse(SERVER_BASE_URL)
         if parsed.port:
             port = parsed.port
-        # Don't use hostname from URL for binding
-        # The SERVER_BASE_URL is for external access, not for binding
     
-    # Check for SSL parameters from environment or command line
     ssl_cert = os.environ.get("MCP_SSL_CERT")
     ssl_key = os.environ.get("MCP_SSL_KEY")
     
     logger.info(f"Using code directory: {CODE_DIR}")
     logger.info(f"Server name: {SERVER_NAME}")
     logger.info(f"Base URL: {SERVER_BASE_URL}")
-    logger.info(f"Ignoring directories: {', '.join(IGNORE_DIRS)}")
     
     # Initialize search engine
     global search_engine
@@ -338,27 +410,38 @@ def main():
         logger.error(f"Failed to initialize search engine: {e}")
         raise
     
-    logger.info("Starting OpenAI-compatible Code Search MCP server...")
-    logger.info(f"Server will be accessible via SSE transport on {host}:{port}")
-    logger.info(f"To use with ChatGPT, connect to: {SERVER_BASE_URL}/sse/")
+    logger.info("Starting OpenAI-compatible MCP server with OAuth...")
+    logger.info(f"SSE endpoint: {SERVER_BASE_URL}/")
     
     try:
-        # Check if we need to run with uvicorn for HTTPS support
         if ssl_cert and ssl_key:
+            # For HTTPS, create a combined app with OAuth routes
             logger.info(f"Running with HTTPS (cert: {ssl_cert}, key: {ssl_key})")
-            # Use uvicorn directly for HTTPS support
-            import uvicorn
-            from starlette.applications import Starlette
-            from starlette.routing import Mount
             
-            # Create Starlette app with MCP SSE endpoint
+            # Create OAuth routes
+            oauth_routes = [
+                Route('/oauth/authorize', oauth_authorize),
+                Route('/oauth/token', oauth_token, methods=['POST']),
+                Route('/oauth/register', oauth_register, methods=['POST']),
+                Route('/.well-known/oauth-authorization-server', oauth_metadata),
+            ]
+            
+            # Create combined app - Mount MCP at root like working version
             app = Starlette(
-                routes=[
-                    Mount("/", app=mcp.sse_app()),
+                routes=oauth_routes + [
+                    Mount("/", app=mcp.sse_app()),  # MCP SSE at root
                 ]
             )
             
-            # Run with uvicorn and SSL
+            # Add CORS
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"]
+            )
+            
             uvicorn.run(
                 app,
                 host=host,
@@ -368,8 +451,9 @@ def main():
                 timeout_graceful_shutdown=0
             )
         else:
-            # Run with standard SSE transport
+            # For HTTP, just run MCP directly like working version
             mcp.run(transport="sse", host=host, port=port)
+            
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
     except Exception as e:
