@@ -14,8 +14,8 @@ fi
 DEFAULT_CODE_DIR="${MCP_CODE_DIR:-/Users/matt/SynologyDrive/code/projectflow}"
 DEFAULT_PORT=8888
 DEFAULT_HOST="0.0.0.0"
-DEFAULT_SSL_CERT="${MCP_SSL_CERT:-/Users/matt/fsdownload/cert.pem}"
-DEFAULT_SSL_KEY="${MCP_SSL_KEY:-/Users/matt/fsdownload/key.pem}"
+DEFAULT_SSL_CERT="${MCP_SSL_CERT:-/Users/matt/SynologyDrive/code/codemcp/cert.pem}"
+DEFAULT_SSL_KEY="${MCP_SSL_KEY:-/Users/matt/SynologyDrive/code/codemcp/key.pem}"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -143,5 +143,13 @@ echo "Starting server..."
 echo "========================================="
 echo ""
 
-# Run the OAuth-enabled server
-python -m codemcp.openai_mcp_oauth_server
+# Check if uv is available and run the server
+if command -v uv &> /dev/null; then
+    echo "Using uv to run the server..."
+    # Run the OAuth-enabled server with uv
+    uv run python -m codemcp.openai_mcp_oauth_server
+else
+    echo "uv not found, using python directly..."
+    # Run the OAuth-enabled server
+    python -m codemcp.openai_mcp_oauth_server
+fi
