@@ -11,10 +11,14 @@ import json
 import secrets
 import hashlib
 import time
+import asyncio
+import threading
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from urllib.parse import urlparse
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
@@ -69,14 +73,82 @@ mcp = FastMCP(
     instructions=server_instructions
 )
 
+class CodeFileWatcher(FileSystemEventHandler):
+    """File system watcher for code changes with incremental updates"""
+    
+    def __init__(self, search_engine):
+        self.search_engine = search_engine
+        self.debounce_timer = None
+        self.debounce_delay = 2.0  # 2 seconds debounce
+        self.pending_changes = set()  # Track pending file changes
+        self.changes_lock = threading.Lock()
+        
+    def on_any_event(self, event):
+        if event.is_directory:
+            return
+            
+        # Check if it's a code file
+        try:
+            path = Path(event.src_path)
+            if path.suffix.lower() not in CODE_EXTENSIONS:
+                return
+                
+            # Check if should be ignored
+            relative_path = path.relative_to(self.search_engine.code_dir)
+            if self.search_engine._should_ignore(relative_path):
+                return
+                
+        except (ValueError, OSError):
+            # Path might be outside code_dir or invalid
+            return
+        
+        # Track the changed file
+        with self.changes_lock:
+            self.pending_changes.add(str(relative_path))
+        
+        # Debounce: cancel previous timer and start new one
+        if self.debounce_timer:
+            self.debounce_timer.cancel()
+            
+        self.debounce_timer = threading.Timer(
+            self.debounce_delay, 
+            self._trigger_update
+        )
+        self.debounce_timer.start()
+        
+    def _trigger_update(self):
+        """Trigger incremental index update after debounce delay"""
+        try:
+            # Get pending changes and clear the set
+            with self.changes_lock:
+                changed_files = set(self.pending_changes)
+                self.pending_changes.clear()
+            
+            if not changed_files:
+                return
+                
+            logger.info(f"File changes detected for {len(changed_files)} files, updating index...")
+            
+            # For now, do full rebuild (can be optimized later for true incremental updates)
+            self.search_engine._update_index()
+            logger.info("Index updated successfully")
+        except Exception as e:
+            logger.error(f"Error updating index: {e}")
+
+
 class CodeSearchEngine:
-    """Code search engine for local code repositories (same as working version)"""
+    """Code search engine for local code repositories with file monitoring"""
     
     def __init__(self, code_dir: str):
         self.code_dir = Path(code_dir).resolve()
         if not self.code_dir.exists():
             raise ValueError(f"Code directory does not exist: {code_dir}")
+        
         self._index = self._build_index()
+        self._lock = threading.RLock()  # Thread-safe index updates
+        
+        # Initialize file watcher
+        self._setup_file_watcher()
     
     def _should_ignore(self, path: Path) -> bool:
         """Check if a path should be ignored"""
@@ -85,7 +157,35 @@ class CodeSearchEngine:
                 return True
         return False
     
+    def _setup_file_watcher(self):
+        """Setup file system watcher"""
+        try:
+            self.watcher = CodeFileWatcher(self)
+            self.observer = Observer()
+            self.observer.schedule(
+                self.watcher, 
+                str(self.code_dir), 
+                recursive=True
+            )
+            self.observer.start()
+            logger.info(f"File watcher started for: {self.code_dir}")
+        except Exception as e:
+            logger.error(f"Failed to setup file watcher: {e}")
+            self.observer = None
+    
+    def _update_index(self):
+        """Thread-safe index update"""
+        with self._lock:
+            logger.info("Rebuilding index...")
+            new_index = self._build_index_internal()
+            self._index = new_index
+            logger.info(f"Index rebuilt with {len(new_index)} files")
+    
     def _build_index(self) -> Dict[str, Dict[str, Any]]:
+        """Build initial index"""
+        return self._build_index_internal()
+    
+    def _build_index_internal(self) -> Dict[str, Dict[str, Any]]:
         """Build an index of all code files in the directory"""
         index = {}
         indexed_count = 0
@@ -148,7 +248,11 @@ class CodeSearchEngine:
         query_lower = query.lower()
         results = []
         
-        for doc_id, doc in self._index.items():
+        # Thread-safe access to index
+        with self._lock:
+            index_snapshot = dict(self._index)
+        
+        for doc_id, doc in index_snapshot.items():
             score = 0
             
             if query_lower in doc['filename'].lower():
@@ -189,7 +293,9 @@ class CodeSearchEngine:
     
     def fetch(self, doc_id: str) -> Optional[Dict[str, Any]]:
         """Fetch complete code file by ID"""
-        doc = self._index.get(doc_id)
+        # Thread-safe access to index
+        with self._lock:
+            doc = self._index.get(doc_id)
         
         if not doc:
             return None
@@ -208,6 +314,19 @@ class CodeSearchEngine:
                 'lines': doc['lines']
             }
         }
+    
+    def shutdown(self):
+        """Clean shutdown of file watcher"""
+        if hasattr(self, 'observer') and self.observer:
+            try:
+                self.observer.stop()
+                self.observer.join(timeout=5.0)
+                logger.info("File watcher stopped")
+            except Exception as e:
+                logger.error(f"Error stopping file watcher: {e}")
+        
+        if hasattr(self, 'watcher') and hasattr(self.watcher, 'debounce_timer') and self.watcher.debounce_timer:
+            self.watcher.debounce_timer.cancel()
 
 # Initialize search engine
 search_engine = None
@@ -467,6 +586,10 @@ def main():
     except Exception as e:
         logger.error(f"Server error: {e}")
         raise
+    finally:
+        # Clean shutdown
+        if search_engine:
+            search_engine.shutdown()
 
 if __name__ == "__main__":
     main()

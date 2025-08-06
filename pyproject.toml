@@ -21,6 +21,7 @@ dependencies = [
     "starlette>=0.35.1",
     "google-genai>=1.10.0",
     "pathspec>=0.12.1",
+    "watchdog>=4.0.0",
 ]
 
 [dependency-groups]
