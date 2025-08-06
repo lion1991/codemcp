@@ -23,6 +23,7 @@ from starlette.responses import JSONResponse, HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware import Middleware
 import uvicorn
+from .oauth_middleware import OAuthMiddleware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -431,6 +432,13 @@ def main():
                 routes=oauth_routes + [
                     Mount("/", app=mcp.sse_app()),  # MCP SSE at root
                 ]
+            )
+            
+            # Add OAuth protection for SSE endpoint
+            app.add_middleware(
+                OAuthMiddleware,
+                oauth_tokens=oauth_tokens,
+                protected_paths=["/"]  # Protect SSE endpoint
             )
             
             # Add CORS
