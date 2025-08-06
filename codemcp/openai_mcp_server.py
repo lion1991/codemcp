@@ -10,6 +10,7 @@ Designed to work with ChatGPT's chat and deep research features.
 import logging
 import os
 import re
+import json
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import hashlib
@@ -22,7 +23,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-CODE_DIR = os.environ.get("MCP_CODE_DIR", os.getcwd())  # Default to current directory
+CODE_DIR = os.environ.get("MCP_CODE_DIR", os.getcwd())
 IGNORE_DIRS = os.environ.get("MCP_IGNORE_DIRS", ".git,node_modules,__pycache__,.venv,venv,dist,build").split(",")
 SERVER_NAME = os.environ.get("MCP_SERVER_NAME", "Code Search MCP Server")
 SERVER_BASE_URL = os.environ.get("MCP_SERVER_BASE_URL", "http://localhost:8000")
@@ -43,6 +44,9 @@ This MCP server provides code search and retrieval capabilities for local code r
 Use the search tool to find relevant code files based on keywords, function names, or code patterns,
 then use the fetch tool to retrieve complete file content for analysis.
 """
+
+# Set JSON encoder to not escape Unicode
+json.encoder.ensure_ascii = False
 
 mcp = FastMCP(
     name=SERVER_NAME,
@@ -83,18 +87,17 @@ class CodeSearchEngine:
                     relative_path = file_path.relative_to(self.code_dir)
                     file_id = hashlib.md5(str(relative_path).encode()).hexdigest()[:12]
                     
-                    # Read file content
+                    # Read file content with UTF-8 encoding
                     content = file_path.read_text(encoding='utf-8', errors='ignore')
                     
                     # Extract language from extension
                     language = self._get_language(file_path.suffix)
                     
-                    # Create document metadata
                     index[file_id] = {
                         'id': file_id,
                         'path': str(file_path),
                         'relative_path': str(relative_path),
-                        'title': str(relative_path),  # Use relative path as title
+                        'title': str(relative_path),
                         'filename': file_path.name,
                         'content': content,
                         'size': len(content),
@@ -116,40 +119,15 @@ class CodeSearchEngine:
     def _get_language(self, suffix: str) -> str:
         """Get language name from file extension"""
         language_map = {
-            '.py': 'python',
-            '.js': 'javascript',
-            '.ts': 'typescript',
-            '.jsx': 'javascript',
-            '.tsx': 'typescript',
-            '.java': 'java',
-            '.c': 'c',
-            '.cpp': 'cpp',
-            '.cc': 'cpp',
-            '.h': 'c',
-            '.hpp': 'cpp',
-            '.cs': 'csharp',
-            '.rb': 'ruby',
-            '.go': 'go',
-            '.rs': 'rust',
-            '.php': 'php',
-            '.swift': 'swift',
-            '.kt': 'kotlin',
-            '.scala': 'scala',
-            '.r': 'r',
-            '.sh': 'shell',
-            '.bash': 'bash',
-            '.ps1': 'powershell',
-            '.html': 'html',
-            '.css': 'css',
-            '.scss': 'scss',
-            '.json': 'json',
-            '.xml': 'xml',
-            '.yaml': 'yaml',
-            '.yml': 'yaml',
-            '.sql': 'sql',
-            '.md': 'markdown',
-            '.vue': 'vue',
-            '.svelte': 'svelte'
+            '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
+            '.jsx': 'javascript', '.tsx': 'typescript', '.java': 'java',
+            '.c': 'c', '.cpp': 'cpp', '.cc': 'cpp', '.h': 'c', '.hpp': 'cpp',
+            '.cs': 'csharp', '.rb': 'ruby', '.go': 'go', '.rs': 'rust',
+            '.php': 'php', '.swift': 'swift', '.kt': 'kotlin', '.scala': 'scala',
+            '.r': 'r', '.sh': 'shell', '.bash': 'bash', '.ps1': 'powershell',
+            '.html': 'html', '.css': 'css', '.scss': 'scss', '.json': 'json',
+            '.xml': 'xml', '.yaml': 'yaml', '.yml': 'yaml', '.sql': 'sql',
+            '.md': 'markdown', '.vue': 'vue', '.svelte': 'svelte'
         }
         return language_map.get(suffix.lower(), 'text')
     
@@ -161,65 +139,28 @@ class CodeSearchEngine:
         query_lower = query.lower()
         results = []
         
-        # Check if query looks like a regex pattern
-        is_regex = False
-        regex_pattern = None
-        if any(c in query for c in ['.*', '.+', '[', ']', '^', '$', '\\b', '\\w']):
-            try:
-                regex_pattern = re.compile(query, re.IGNORECASE | re.MULTILINE)
-                is_regex = True
-            except re.error:
-                # Not a valid regex, treat as normal text
-                pass
-        
         for doc_id, doc in self._index.items():
             score = 0
-            matches = []
             
-            # Search in filename
             if query_lower in doc['filename'].lower():
                 score += 20
-                matches.append(f"Filename match: {doc['filename']}")
             
-            # Search in relative path
             if query_lower in doc['relative_path'].lower():
                 score += 15
-                matches.append(f"Path match: {doc['relative_path']}")
             
-            # Search in content
             content_lower = doc['content'].lower()
-            
-            if is_regex and regex_pattern:
-                # Regex search
-                regex_matches = regex_pattern.findall(doc['content'])
-                if regex_matches:
-                    score += len(regex_matches) * 2
-                    match = regex_pattern.search(doc['content'])
-                    if match:
-                        match_pos = match.start()
-                    else:
-                        match_pos = -1
-                else:
-                    match_pos = -1
+            if query_lower in content_lower:
+                occurrences = content_lower.count(query_lower)
+                score += occurrences * 2
+                match_pos = content_lower.find(query_lower)
+                
+                if f"def {query_lower}" in content_lower or f"class {query_lower}" in content_lower:
+                    score += 30
             else:
-                # Text search
-                if query_lower in content_lower:
-                    # Count occurrences
-                    occurrences = content_lower.count(query_lower)
-                    score += occurrences * 2
-                    match_pos = content_lower.find(query_lower)
-                    
-                    # Bonus for function/class definitions
-                    if f"def {query_lower}" in content_lower or f"class {query_lower}" in content_lower:
-                        score += 30
-                        matches.append("Function/Class definition")
-                else:
-                    match_pos = -1
+                match_pos = -1
             
             if score > 0:
-                # Extract snippet around the match
                 if match_pos != -1:
-                    # Find line containing the match
                     lines = doc['content'].splitlines()
                     char_count = 0
                     line_num = 0
@@ -228,14 +169,11 @@ class CodeSearchEngine:
                         if char_count <= match_pos < char_count + len(line) + 1:
                             line_num = i
                             break
-                        char_count += len(line) + 1  # +1 for newline
+                        char_count += len(line) + 1
                     
-                    # Get context lines
                     start_line = max(0, line_num - 2)
                     end_line = min(len(lines), line_num + 3)
                     snippet_lines = lines[start_line:end_line]
-                    
-                    # Add line numbers to snippet
                     snippet = "\n".join([f"{start_line + i + 1:4d}: {line}" 
                                         for i, line in enumerate(snippet_lines)])
                     
@@ -244,13 +182,11 @@ class CodeSearchEngine:
                     if end_line < len(lines):
                         snippet = snippet + "\n..."
                 else:
-                    # Use first few lines as snippet
                     lines = doc['content'].splitlines()[:5]
                     snippet = "\n".join([f"{i+1:4d}: {line}" for i, line in enumerate(lines)])
                     if len(doc['content'].splitlines()) > 5:
                         snippet += "\n..."
                 
-                # Add metadata to snippet
                 snippet = f"[{doc['language']}] {doc['relative_path']} ({doc['lines']} lines)\n{snippet}"
                 
                 results.append({
@@ -258,21 +194,14 @@ class CodeSearchEngine:
                     'title': doc['relative_path'],
                     'text': snippet,
                     'url': doc['url'],
-                    'score': score,
-                    'language': doc['language'],
-                    'lines': doc['lines']
+                    'score': score
                 })
         
-        # Sort by relevance score
         results.sort(key=lambda x: x['score'], reverse=True)
         
-        # Remove internal fields from results
         for result in results:
             del result['score']
-            del result['language']
-            del result['lines']
         
-        # Limit to top 20 results for code search
         return results[:20]
     
     def fetch(self, doc_id: str) -> Optional[Dict[str, Any]]:
@@ -285,7 +214,7 @@ class CodeSearchEngine:
         return {
             'id': doc['id'],
             'title': doc['relative_path'],
-            'text': doc['content'],
+            'text': doc['content'],  # Return raw UTF-8 content
             'url': doc['url'],
             'metadata': {
                 'path': doc['path'],
@@ -372,6 +301,8 @@ async def fetch(id: str) -> Dict[str, Any]:
         raise ValueError(f"Code file with ID '{id}' not found")
     
     logger.info(f"Fetched code file: {document['title']}")
+    
+    # The document already contains UTF-8 text properly
     return document
 
 def main():
