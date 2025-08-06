@@ -29,9 +29,34 @@ from starlette.middleware import Middleware
 import uvicorn
 from .oauth_middleware import OAuthMiddleware
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging with Rich
+try:
+    from rich.logging import RichHandler
+    from rich.console import Console
+    
+    console = Console()
+    # Standard logging for system messages
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(console=console, rich_tracebacks=True)]
+    )
+    USE_RICH = True
+except ImportError:
+    console = None
+    logging.basicConfig(level=logging.INFO)
+    USE_RICH = False
+
 logger = logging.getLogger(__name__)
+
+# Custom colorized logging function
+def clog(message: str):
+    """Custom log with Rich color support"""
+    if USE_RICH and console:
+        console.log(message)
+    else:
+        logger.info(message)
 
 # Configuration
 CODE_DIR = os.environ.get("MCP_CODE_DIR", os.getcwd())
@@ -60,6 +85,20 @@ CODE_EXTENSIONS = {
 
 # Set JSON encoder to not escape Unicode
 json.encoder.ensure_ascii = False
+
+def format_bytes(size_bytes: int) -> str:
+    """Format bytes in human readable format"""
+    if size_bytes == 0:
+        return "0B"
+    elif size_bytes < 1024:
+        return f"{size_bytes}B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f}KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f}MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.1f}GB"
+
 
 # Initialize the FastMCP server (same as working non-OAuth version)
 server_instructions = """
@@ -127,11 +166,11 @@ class CodeFileWatcher(FileSystemEventHandler):
             if not changed_files:
                 return
                 
-            logger.info(f"File changes detected for {len(changed_files)} files, updating index...")
+            clog(f"📝 File changes detected for [bold green]{len(changed_files)}[/bold green] files, updating index...")
             
             # For now, do full rebuild (can be optimized later for true incremental updates)
             self.search_engine._update_index()
-            logger.info("Index updated successfully")
+            logger.info(f"✅ Index updated successfully")
         except Exception as e:
             logger.error(f"Error updating index: {e}")
 
@@ -168,7 +207,7 @@ class CodeSearchEngine:
                 recursive=True
             )
             self.observer.start()
-            logger.info(f"File watcher started for: {self.code_dir}")
+            clog(f"👀 File watcher started for: [bold yellow]{self.code_dir}[/bold yellow]")
         except Exception as e:
             logger.error(f"Failed to setup file watcher: {e}")
             self.observer = None
@@ -176,14 +215,34 @@ class CodeSearchEngine:
     def _update_index(self):
         """Thread-safe index update"""
         with self._lock:
-            logger.info("Rebuilding index...")
+            start_time = time.time()
+            logger.info(f"🔄 Rebuilding index...")
             new_index = self._build_index_internal()
             self._index = new_index
-            logger.info(f"Index rebuilt with {len(new_index)} files")
+            
+            # Calculate metrics
+            end_time = time.time()
+            duration_ms = (end_time - start_time) * 1000
+            
+            # Calculate total index size
+            total_content_size = sum(len(doc.get('content', '').encode('utf-8')) for doc in new_index.values())
+            
+            clog(f"✅ Index rebuilt: [bold green]{len(new_index)}[/bold green] files [[bold magenta]{format_bytes(total_content_size)}[/bold magenta], [bold cyan]{duration_ms:.1f}ms[/bold cyan]]")
     
     def _build_index(self) -> Dict[str, Dict[str, Any]]:
         """Build initial index"""
-        return self._build_index_internal()
+        start_time = time.time()
+        clog(f"🏗️ Building initial index for: [bold yellow]{self.code_dir}[/bold yellow]")
+        
+        index = self._build_index_internal()
+        
+        # Calculate metrics
+        end_time = time.time()
+        duration_ms = (end_time - start_time) * 1000
+        total_content_size = sum(len(doc.get('content', '').encode('utf-8')) for doc in index.values())
+        
+        clog(f"✅ Initial index: [bold green]{len(index)}[/bold green] files [[bold magenta]{format_bytes(total_content_size)}[/bold magenta], [bold cyan]{duration_ms:.1f}ms[/bold cyan]]")
+        return index
     
     def _build_index_internal(self) -> Dict[str, Dict[str, Any]]:
         """Build an index of all code files in the directory"""
@@ -359,14 +418,27 @@ async def search(query: str) -> Dict[str, List[Dict[str, Any]]]:
         logger.error("Search engine not initialized")
         return {"results": []}
     
-    logger.info(f"Searching for query: '{query}'")
+    start_time = time.time()
+    clog(f"🔍 Searching for query: [bold blue]'{query}'[/bold blue]")
     
     try:
         results = search_engine.search(query)
-        logger.info(f"Search returned {len(results)} results")
-        return {"results": results}
+        
+        # Calculate metrics
+        end_time = time.time()
+        duration_ms = (end_time - start_time) * 1000
+        
+        # Calculate approximate response size
+        response_data = {"results": results}
+        response_size = len(str(response_data).encode('utf-8'))
+        
+        # 简化日志格式 - 使用特殊字符突出重点
+        clog(f"✅ Search completed: [bold green]{len(results)}[/bold green] results │ ⏱ [bold cyan]{duration_ms:.1f}ms[/bold cyan] │ 📊 [bold magenta]{format_bytes(response_size)}[/bold magenta]")
+        return response_data
     except Exception as e:
-        logger.error(f"Search error: {e}")
+        end_time = time.time()
+        duration_ms = (end_time - start_time) * 1000
+        logger.error(f"Search error after {duration_ms:.1f}ms: {e}")
         return {"results": []}
 
 @mcp.tool()
@@ -396,14 +468,25 @@ async def fetch(id: str) -> Dict[str, Any]:
     if not id:
         raise ValueError("File ID is required")
     
-    logger.info(f"Fetching code file with ID: {id}")
+    start_time = time.time()
+    clog(f"📁 Fetching code file with ID: [bold blue]{id}[/bold blue]")
     
     document = search_engine.fetch(id)
     
     if not document:
         raise ValueError(f"Code file with ID '{id}' not found")
     
-    logger.info(f"Fetched code file: {document['title']}")
+    # Calculate metrics
+    end_time = time.time()
+    duration_ms = (end_time - start_time) * 1000
+    
+    # Calculate response size
+    content_size = len(document.get('text', '').encode('utf-8'))
+    total_size = len(str(document).encode('utf-8'))
+    lines = document.get('metadata', {}).get('lines', 0)
+    
+    # 简化日志格式，避免过长
+    clog(f"✅ Fetched: [bold yellow]{document['title']}[/bold yellow] [[bold green]{lines}L[/bold green], [bold magenta]{format_bytes(content_size)}[/bold magenta], [bold cyan]{duration_ms:.1f}ms[/bold cyan]]")
     
     return document
 
