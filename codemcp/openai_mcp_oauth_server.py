@@ -390,6 +390,12 @@ class CodeSearchEngine:
 # Initialize search engine
 search_engine = None
 
+# Concurrent request tracking
+active_requests = 0
+total_requests = 0
+max_concurrent_requests = 0
+request_lock = threading.Lock()
+
 # Define MCP tools EXACTLY like the working non-OAuth version
 @mcp.tool()
 async def search(query: str) -> Dict[str, List[Dict[str, Any]]]:
@@ -412,14 +418,21 @@ async def search(query: str) -> Dict[str, List[Dict[str, Any]]]:
         Dictionary with 'results' key containing list of matching code files.
         Each result includes id, title (file path), text snippet with line numbers, and URL.
     """
-    global search_engine
+    global search_engine, active_requests, total_requests, max_concurrent_requests
     
     if not search_engine:
         logger.error("Search engine not initialized")
         return {"results": []}
     
+    # Track concurrent requests
+    with request_lock:
+        active_requests += 1
+        total_requests += 1
+        if active_requests > max_concurrent_requests:
+            max_concurrent_requests = active_requests
+    
     start_time = time.time()
-    clog(f"🔍 Searching for query: [bold blue]'{query}'[/bold blue]")
+    clog(f"🔍 Searching for query: [bold blue]'{query}'[/bold blue] (并发: [bold yellow]{active_requests}[/bold yellow])")
     
     try:
         results = search_engine.search(query)
@@ -440,6 +453,10 @@ async def search(query: str) -> Dict[str, List[Dict[str, Any]]]:
         duration_ms = (end_time - start_time) * 1000
         logger.error(f"Search error after {duration_ms:.1f}ms: {e}")
         return {"results": []}
+    finally:
+        # Decrease active request count
+        with request_lock:
+            active_requests -= 1
 
 @mcp.tool()
 async def fetch(id: str) -> Dict[str, Any]:
@@ -460,7 +477,7 @@ async def fetch(id: str) -> Dict[str, Any]:
     Raises:
         ValueError: If the specified ID is not found
     """
-    global search_engine
+    global search_engine, active_requests, total_requests, max_concurrent_requests
     
     if not search_engine:
         raise ValueError("Search engine not initialized")
@@ -468,27 +485,39 @@ async def fetch(id: str) -> Dict[str, Any]:
     if not id:
         raise ValueError("File ID is required")
     
+    # Track concurrent requests
+    with request_lock:
+        active_requests += 1
+        total_requests += 1
+        if active_requests > max_concurrent_requests:
+            max_concurrent_requests = active_requests
+    
     start_time = time.time()
-    clog(f"📁 Fetching code file with ID: [bold blue]{id}[/bold blue]")
+    clog(f"📁 Fetching code file with ID: [bold blue]{id}[/bold blue] (并发: [bold yellow]{active_requests}[/bold yellow])")
     
-    document = search_engine.fetch(id)
-    
-    if not document:
-        raise ValueError(f"Code file with ID '{id}' not found")
-    
-    # Calculate metrics
-    end_time = time.time()
-    duration_ms = (end_time - start_time) * 1000
-    
-    # Calculate response size
-    content_size = len(document.get('text', '').encode('utf-8'))
-    total_size = len(str(document).encode('utf-8'))
-    lines = document.get('metadata', {}).get('lines', 0)
-    
-    # 简化日志格式，避免过长
-    clog(f"✅ Fetched: [bold yellow]{document['title']}[/bold yellow] [[bold green]{lines}L[/bold green], [bold magenta]{format_bytes(content_size)}[/bold magenta], [bold cyan]{duration_ms:.1f}ms[/bold cyan]]")
-    
-    return document
+    try:
+        document = search_engine.fetch(id)
+        
+        if not document:
+            raise ValueError(f"Code file with ID '{id}' not found")
+        
+        # Calculate metrics
+        end_time = time.time()
+        duration_ms = (end_time - start_time) * 1000
+        
+        # Calculate response size
+        content_size = len(document.get('text', '').encode('utf-8'))
+        total_size = len(str(document).encode('utf-8'))
+        lines = document.get('metadata', {}).get('lines', 0)
+        
+        # 简化日志格式，避免过长
+        clog(f"✅ Fetched: [bold yellow]{document['title']}[/bold yellow] [[bold green]{lines}L[/bold green], [bold magenta]{format_bytes(content_size)}[/bold magenta], [bold cyan]{duration_ms:.1f}ms[/bold cyan]]")
+        
+        return document
+    finally:
+        # Decrease active request count
+        with request_lock:
+            active_requests -= 1
 
 # OAuth endpoints (simplified)
 async def oauth_authorize(request):
@@ -652,13 +681,27 @@ def main():
                 allow_headers=["*"]
             )
             
+            # 检测 uvloop 是否可用
+            try:
+                import uvloop
+                loop_type = "uvloop"
+                logger.info("Using uvloop for better async performance")
+            except ImportError:
+                loop_type = "asyncio"
+                logger.info("uvloop not available, using default asyncio")
+            
             uvicorn.run(
                 app,
                 host=host,
                 port=port,
                 ssl_certfile=ssl_cert,
                 ssl_keyfile=ssl_key,
-                timeout_graceful_shutdown=0
+                timeout_graceful_shutdown=0,
+                # 并发优化配置
+                workers=1,  # 使用单个 worker（对于 I/O 密集型任务足够）
+                loop=loop_type,  # 使用更快的事件循环（如果可用）
+                limit_concurrency=1000,  # 允许最多 1000 个并发连接
+                limit_max_requests=10000,  # 每个 worker 处理 10000 个请求后重启
             )
         else:
             # For HTTP, just run MCP directly like working version
